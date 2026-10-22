@@ -542,6 +542,9 @@ fn run_menu(paths: &Paths) -> i32 {
         };
         let choice = choice.trim().to_lowercase();
 
+        if !matches!(choice.as_str(), "0" | "q" | "quit" | "exit") {
+            output::clear_screen();
+        }
         println!();
 
         match choice.as_str() {

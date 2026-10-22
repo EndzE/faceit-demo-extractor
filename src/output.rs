@@ -63,6 +63,19 @@ pub fn banner() -> String {
     format!("{}\n{}", title(APP_NAME), rule(RULE_WIDTH))
 }
 
+pub fn clear_screen() {
+    if is_silent() || !io::stdout().is_terminal() {
+        return;
+    }
+
+    print!("\x1b[3J");
+    let _ = io::stdout().flush();
+    if crate::win32::clear_console().is_err() {
+        print!("\x1b[2J\x1b[H");
+        let _ = io::stdout().flush();
+    }
+}
+
 pub fn field(name: &str, value: impl Display) -> String {
     format!("  {}  {value}", format!("{name:<16}").dimmed())
 }

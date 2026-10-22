@@ -4,6 +4,10 @@ use std::path::Path;
 
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+use windows::Win32::System::Console::{
+    CONSOLE_SCREEN_BUFFER_INFO, COORD, FillConsoleOutputAttribute, FillConsoleOutputCharacterW,
+    GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE, SetConsoleCursorPosition,
+};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Threading::{
     CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
@@ -47,6 +51,26 @@ pub fn recycle_file(path: &Path) -> Result<(), String> {
     }
 
     Err(format!("SHFileOperationW returned {result}"))
+}
+
+pub fn clear_console() -> Result<(), String> {
+    unsafe {
+        let handle = GetStdHandle(STD_OUTPUT_HANDLE).map_err(|err| err.to_string())?;
+        let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+        GetConsoleScreenBufferInfo(handle, &mut info).map_err(|err| err.to_string())?;
+
+        let cells = info.dwSize.X.max(0) as u32 * info.dwSize.Y.max(0) as u32;
+        let home = COORD { X: 0, Y: 0 };
+        let mut written = 0u32;
+
+        FillConsoleOutputCharacterW(handle, u16::from(b' '), cells, home, &mut written)
+            .map_err(|err| err.to_string())?;
+        FillConsoleOutputAttribute(handle, info.wAttributes.0, cells, home, &mut written)
+            .map_err(|err| err.to_string())?;
+        SetConsoleCursorPosition(handle, home).map_err(|err| err.to_string())?;
+    }
+
+    Ok(())
 }
 
 pub fn available_space(path: &Path) -> Result<u64, String> {
