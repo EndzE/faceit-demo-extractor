@@ -14,6 +14,13 @@ pub fn utf16_len(value: &str) -> usize {
     value.encode_utf16().count()
 }
 
+pub fn is_valid_demo_filename(name: &str) -> bool {
+    is_valid_filename(name)
+        && name
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("dem"))
+}
+
 pub fn is_valid_filename(name: &str) -> bool {
     if name.is_empty() || name == "." || name == ".." {
         return false;

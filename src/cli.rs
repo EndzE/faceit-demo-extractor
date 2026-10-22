@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use crate::queue::ContextMenuError;
-use crate::validate::is_valid_filename;
+use crate::validate::is_valid_demo_filename;
 use crate::{Paths, config, cs2, extract, output, queue, registry, win32};
 
 const REGISTRY_FLAGS: &[&str] = &["--install", "--remove", "--update-label"];
@@ -357,15 +357,12 @@ fn menu_change_filename(paths: &Paths) {
         return;
     }
 
-    if !is_valid_filename(&new_name) {
-        println!(
-            "  {}",
-            output::caution("That name cannot be used as a Windows filename.")
-        );
+    if !is_valid_demo_filename(&new_name) {
+        println!("  {}", output::caution("That demo filename is not valid."));
         println!(
             "  {}",
             output::muted(
-                "Use a single filename without reserved names or <>:\"|?* / \\ characters."
+                "Use a single filename ending in .dem, without reserved names or <>:\"|?* / \\ characters."
             )
         );
         return;

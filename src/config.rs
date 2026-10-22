@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Map, Value};
 
 use crate::output::{self, warn};
-use crate::validate::is_valid_filename;
+use crate::validate::is_valid_demo_filename;
 use crate::{DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN, DEFAULT_TARGET_FILENAME};
 
 static CONFIG_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -64,14 +64,19 @@ fn strip_bom(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
 }
 
+fn parse_config_json(bytes: &[u8]) -> Result<Map<String, Value>, String> {
+    match serde_json::from_slice::<Value>(strip_bom(bytes)) {
+        Ok(Value::Object(map)) => Ok(map),
+        Ok(_) => Err("config.json does not contain a JSON object".to_string()),
+        Err(err) => Err(format!("config.json is not valid JSON ({err})")),
+    }
+}
+
 pub fn read_config_json(path: &Path) -> Map<String, Value> {
     let Ok(bytes) = fs::read(path) else {
         return Map::new();
     };
-    match serde_json::from_slice::<Value>(strip_bom(&bytes)) {
-        Ok(Value::Object(map)) => map,
-        _ => Map::new(),
-    }
+    parse_config_json(&bytes).unwrap_or_default()
 }
 
 pub fn load_config(path: &Path) -> Config {
@@ -84,14 +89,14 @@ pub fn load_config(path: &Path) -> Config {
         .unwrap_or_else(|| Value::String(DEFAULT_TARGET_FILENAME.to_string()));
 
     match &name_value {
-        Value::String(name) if is_valid_filename(name) => {
+        Value::String(name) if is_valid_demo_filename(name) => {
             config.target_filename = name.clone();
         }
         _ => {
             warn_config_once(
                 "target_filename",
                 format!(
-                    "invalid \"target_filename\" value {name_value} in config.json; using the default {DEFAULT_TARGET_FILENAME}"
+                    "invalid \"target_filename\" value {name_value} in config.json; it must be a single .dem filename; using the default {DEFAULT_TARGET_FILENAME}"
                 ),
             );
         }
@@ -133,8 +138,32 @@ fn coerce_bool(data: &Map<String, Value>, key: &str, default: bool) -> bool {
     }
 }
 
+fn preserve_invalid_config(path: &Path) -> Result<PathBuf, String> {
+    let mut backup_name = path.as_os_str().to_os_string();
+    backup_name.push(".bak");
+    let backup = PathBuf::from(backup_name);
+
+    if backup.exists() {
+        fs::remove_file(&backup)
+            .map_err(|err| format!("could not replace {}: {err}", backup.display()))?;
+    }
+    fs::rename(path, &backup).map_err(|err| {
+        format!(
+            "could not rename {} to {}: {err}",
+            path.display(),
+            backup.display()
+        )
+    })?;
+
+    Ok(backup)
+}
+
 pub fn save_config(path: &Path, updates: &[(&str, Value)]) -> Result<(), String> {
-    let mut merged = read_config_json(path);
+    let mut merged = match fs::read(path) {
+        Ok(bytes) => parse_config_json(&bytes)?,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Map::new(),
+        Err(err) => return Err(format!("could not read config.json: {err}")),
+    };
     for (key, value) in updates {
         merged.insert((*key).to_string(), value.clone());
     }
@@ -184,17 +213,29 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>)
             ));
             (true, None)
         }
-        Ok(bytes) => match serde_json::from_slice::<Value>(strip_bom(&bytes)) {
-            Err(err) => {
+        Ok(bytes) => match parse_config_json(&bytes) {
+            Err(problem) => {
+                let backup = match preserve_invalid_config(path) {
+                    Ok(backup) => backup,
+                    Err(err) => {
+                        return (
+                            false,
+                            Some(format!(
+                                "{problem}; refusing to overwrite it because a backup could not be created: {err}"
+                            )),
+                        );
+                    }
+                };
                 warn(format!(
-                    "config.json is not valid JSON ({err}); resetting it to defaults"
+                    "{problem}; moved the original to {} and reset it to defaults",
+                    backup.display()
                 ));
                 match save_config(path, &Config::defaults().updates()) {
                     Ok(()) => (true, None),
                     Err(message) => (false, Some(message)),
                 }
             }
-            Ok(Value::Object(data)) => {
+            Ok(data) => {
                 let defaults = Config::defaults().updates();
                 let missing: Vec<&str> = defaults
                     .iter()
@@ -227,13 +268,6 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>)
                         }
                         (true, None)
                     }
-                    Err(message) => (false, Some(message)),
-                }
-            }
-            Ok(_) => {
-                warn("config.json does not contain a JSON object; resetting it to defaults");
-                match save_config(path, &Config::defaults().updates()) {
-                    Ok(()) => (true, None),
                     Err(message) => (false, Some(message)),
                 }
             }

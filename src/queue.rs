@@ -16,6 +16,7 @@ const IDLE_WINDOW: Duration = Duration::from_millis(700);
 const MAX_TOTAL: Duration = Duration::from_secs(60);
 const STARTUP_POLL: Duration = Duration::from_millis(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const WORKER_LOCK_RETRY: Duration = Duration::from_millis(500);
 const CANCEL_GRACE: Duration = Duration::from_millis(1000);
 
 struct WorkerModeGuard;
@@ -220,12 +221,14 @@ pub fn take_queue_files(paths: &Paths) -> Vec<PathBuf> {
     let mut paths_out = Vec::new();
 
     for (_, entry_path) in entries {
-        let raw = fs::read(&entry_path).ok();
-        let _ = fs::remove_file(&entry_path);
-
-        let Some(path) = raw.as_deref().and_then(decode_queue_path) else {
+        let Ok(bytes) = fs::read(&entry_path) else {
             continue;
         };
+        let Some(path) = decode_queue_path(&bytes) else {
+            let _ = fs::remove_file(&entry_path);
+            continue;
+        };
+        let _ = fs::remove_file(&entry_path);
         if keys.insert(path_key(&path)) {
             paths_out.push(path);
         }
@@ -322,6 +325,19 @@ pub fn try_acquire_worker_lock(paths: &Paths) -> io::Result<Option<File>> {
         Ok(()) => Ok(Some(file)),
         Err(TryLockError::WouldBlock) => Ok(None),
         Err(TryLockError::Error(err)) => Err(err),
+    }
+}
+
+fn acquire_worker_lock(paths: &Paths) -> io::Result<Option<File>> {
+    let file = open_worker_lock(paths)?;
+    let deadline = Instant::now() + WORKER_LOCK_RETRY;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => sleep(STARTUP_POLL),
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Error(err)) => return Err(err),
+        }
     }
 }
 
@@ -493,7 +509,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         return 1;
     }
 
-    let mut lock = match try_acquire_worker_lock(paths) {
+    let mut lock = match acquire_worker_lock(paths) {
         Ok(Some(lock)) => lock,
         Ok(None) => return 0,
         Err(err) => {
@@ -524,7 +540,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
             drop(lock);
 
             if has_queued_files(paths) {
-                match try_acquire_worker_lock(paths) {
+                match acquire_worker_lock(paths) {
                     Ok(Some(new_lock)) => {
                         lock = new_lock;
                         write_worker_pid(paths);
@@ -567,4 +583,89 @@ pub fn run_worker(paths: &Paths) -> i32 {
     output::pause("Press Enter to close...");
 
     if any_failed { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE};
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, OPEN_EXISTING,
+    };
+    use windows::core::PCWSTR;
+
+    use super::*;
+
+    struct NoReadHandle(HANDLE);
+
+    impl Drop for NoReadHandle {
+        fn drop(&mut self) {
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    fn deny_read_sharing(path: &Path) -> NoReadHandle {
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(wide.as_ptr()),
+                GENERIC_READ.0,
+                FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                None,
+            )
+            .unwrap()
+        };
+        NoReadHandle(handle)
+    }
+
+    #[test]
+    fn unreadable_queue_entries_are_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = Paths::for_tests(directory.path());
+        fs::create_dir_all(&paths.queue_dir).unwrap();
+        let entry_path = paths.queue_dir.join("locked.path");
+        fs::write(&entry_path, r"C:\demo.zst").unwrap();
+
+        let denied = deny_read_sharing(&entry_path);
+        assert!(fs::read(&entry_path).is_err());
+        assert!(take_queue_files(&paths).is_empty());
+        drop(denied);
+
+        assert_eq!(
+            take_queue_files(&paths),
+            vec![PathBuf::from(r"C:\demo.zst")]
+        );
+        assert!(!entry_path.exists());
+    }
+
+    #[test]
+    fn worker_lock_acquisition_waits_out_a_probe() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = Paths::for_tests(directory.path());
+        let probe = try_acquire_worker_lock(&paths)
+            .unwrap()
+            .expect("probe lock");
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let worker_paths = paths.clone();
+        let worker = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            acquire_worker_lock(&worker_paths).unwrap()
+        });
+
+        started_rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(400));
+        drop(probe);
+
+        assert!(worker.join().unwrap().is_some());
+    }
 }

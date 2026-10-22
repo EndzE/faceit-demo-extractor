@@ -14,7 +14,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, PCWSTR, PWSTR};
 
-const FOF_FLAGS: u16 = 0x0004 | 0x0010 | 0x0040 | 0x0400;
+const FOF_WANTNUKEWARNING: u16 = 0x4000;
+const FOF_FLAGS: u16 = 0x0004 | 0x0010 | 0x0040 | 0x0400 | FOF_WANTNUKEWARNING;
 
 pub fn recycle_file(path: &Path) -> Result<(), String> {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());

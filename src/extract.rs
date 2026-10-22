@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,6 +14,7 @@ use crate::{CANCEL, DEMO_MAGIC, EXTRACTING, MAX_FILENAME_LEN, Paths};
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const CONTENT_CHECKSUM_FLAG: u8 = 0x04;
 const COPY_BUFFER: usize = 1024 * 1024;
+const HEADER_BUFFER: usize = 8 * 1024;
 const PARTIAL_PREFIX: &str = ".faceit-";
 const PARTIAL_SUFFIX: &str = ".partial";
 const ORPHANED_PARTIAL_AGE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -172,22 +173,16 @@ fn read_u64_le(reader: &mut impl Read) -> io::Result<u64> {
     Ok(u64::from_le_bytes(buffer))
 }
 
-fn skip_exact(reader: &mut impl Read, mut remaining: u64) -> io::Result<()> {
-    let mut buffer = [0u8; 8192];
-    while remaining > 0 {
-        let take = remaining.min(buffer.len() as u64) as usize;
-        let read = reader.read(&mut buffer[..take])?;
-        if read == 0 {
-            return Err(io::ErrorKind::UnexpectedEof.into());
-        }
-        remaining -= read as u64;
-    }
-    Ok(())
+fn skip_exact(reader: &mut BufReader<File>, remaining: u64) -> io::Result<()> {
+    let offset = i64::try_from(remaining)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "skip is too large"))?;
+    reader.seek_relative(offset)
 }
 
 fn inspect_zstd_header(input: &Path) -> Result<ZstdHeader, HeaderError> {
     let file = File::open(input).map_err(HeaderError::Open)?;
-    let mut reader = BufReader::with_capacity(COPY_BUFFER, file);
+    let file_len = file.metadata().map_err(HeaderError::Read)?.len();
+    let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
     let mut seen_frame = false;
     let mut has_checksum = true;
     let mut content_size = Some(0u64);
@@ -272,6 +267,10 @@ fn inspect_zstd_header(input: &Path) -> Result<ZstdHeader, HeaderError> {
     }
 
     if !seen_frame {
+        return Err(HeaderError::Format("unexpected end of file"));
+    }
+
+    if reader.stream_position()? > file_len {
         return Err(HeaderError::Format("unexpected end of file"));
     }
 
@@ -527,8 +526,18 @@ pub fn extract_one(
         );
     }
 
-    if keep_zst {
-        println!("{}", output::field("Archive", output::muted("kept")));
+    if keep_zst || !has_checksum {
+        println!(
+            "{}",
+            output::field(
+                "Archive",
+                output::muted(if keep_zst {
+                    "kept"
+                } else {
+                    "kept (checksum missing)"
+                })
+            )
+        );
         return ExtractResult::Ok;
     }
 

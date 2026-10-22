@@ -16,7 +16,7 @@ use faceit_demo_extractor::cs2;
 use faceit_demo_extractor::extract::{self, ExtractResult};
 use faceit_demo_extractor::queue;
 use faceit_demo_extractor::registry;
-use faceit_demo_extractor::validate::{is_valid_filename, utf16_len};
+use faceit_demo_extractor::validate::{is_valid_demo_filename, is_valid_filename, utf16_len};
 use faceit_demo_extractor::{DEMO_MAGIC, HOME_ENV, MAX_FILENAME_LEN, Paths};
 
 fn archive_bytes(payload: &[u8], checksum: bool) -> Vec<u8> {
@@ -103,6 +103,18 @@ fn filename_validation_rejects_invalid_windows_names() {
 }
 
 #[test]
+fn demo_filename_validation_requires_dem_extension() {
+    assert!(is_valid_demo_filename("1.dem"));
+    assert!(is_valid_demo_filename("demo_2024.dem"));
+    assert!(is_valid_demo_filename("DEMO.DEM"));
+    assert!(is_valid_filename("1.txt"));
+    assert!(!is_valid_demo_filename("1.txt"));
+    assert!(!is_valid_demo_filename("1"));
+    assert!(!is_valid_demo_filename("1.dem.txt"));
+    assert!(!is_valid_demo_filename("con.dem"));
+}
+
+#[test]
 fn split_ext_splits_extension() {
     assert_eq!(
         extract::split_ext("1.dem"),
@@ -186,6 +198,18 @@ fn config_falls_back_on_invalid_values() {
 }
 
 #[test]
+fn config_rejects_target_filename_without_dem_extension() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    fs::write(&path, r#"{"target_filename": "1.txt"}"#).unwrap();
+
+    assert_eq!(config::load_config(&path).target_filename, "1.dem");
+
+    fs::write(&path, r#"{"target_filename": "DEMO.DEM"}"#).unwrap();
+    assert_eq!(config::load_config(&path).target_filename, "DEMO.DEM");
+}
+
+#[test]
 fn config_reads_csgo_path() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.json");
@@ -264,6 +288,7 @@ fn ensure_config_adds_missing_keys_only() {
 fn ensure_config_resets_invalid_json_and_non_object() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.json");
+    let backup = directory.path().join("config.json.bak");
 
     fs::write(&path, "not json").unwrap();
     let (ok, error) = config::ensure_config_file(&path, false);
@@ -278,12 +303,43 @@ fn ensure_config_resets_invalid_json_and_non_object() {
             "csgo_path": null
         })
     );
+    assert_eq!(fs::read_to_string(&backup).unwrap(), "not json");
 
     fs::write(&path, "[]").unwrap();
     let (ok, error) = config::ensure_config_file(&path, false);
     assert!(ok, "{error:?}");
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["target_filename"], serde_json::Value::from("1.dem"));
+    assert_eq!(fs::read_to_string(&backup).unwrap(), "[]");
+}
+
+#[test]
+fn ensure_config_refuses_to_reset_when_backup_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    fs::write(&path, "not json").unwrap();
+    fs::create_dir(directory.path().join("config.json.bak")).unwrap();
+
+    let (ok, error) = config::ensure_config_file(&path, false);
+    assert!(!ok);
+    assert!(
+        error.unwrap().contains("refusing to overwrite"),
+        "unexpected error"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
+}
+
+#[test]
+fn save_config_refuses_to_overwrite_invalid_json() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    fs::write(&path, "not json").unwrap();
+
+    let error =
+        config::save_config(&path, &[("keep_zst", serde_json::Value::Bool(true))]).unwrap_err();
+    assert!(error.contains("not valid JSON"), "{error}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
+    assert!(!directory.path().join("config.json.bak").exists());
 }
 
 #[test]
@@ -399,17 +455,18 @@ fn extract_accepts_a_skippable_frame_prefix() {
 }
 
 #[test]
-fn extract_without_checksum_succeeds() {
+fn extract_without_checksum_keeps_the_archive() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("demo.dem.zst");
     let output = directory.path().join("1.dem");
     let payload = demo_payload(1024);
     write_archive(&input, &payload, false);
 
-    let result = extract::extract_one(&input, &output, true, false);
+    let result = extract::extract_one(&input, &output, false, false);
 
     assert_eq!(result, ExtractResult::Ok);
     assert_eq!(fs::read(&output).unwrap(), payload);
+    assert!(input.exists());
 }
 
 #[test]
