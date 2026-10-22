@@ -1,0 +1,25 @@
+[package]
+name = "faceit-demo-extractor"
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.89"
+
+[[bin]]
+name = "faceit-dem"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+[dependencies]
+anyhow = "1.0.104"
+ctrlc = "3.5.2"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tempfile = "3.27.0"
+unicode-general-category = "1.1.0"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_System_Environment"] }
+winreg = "0.56.0"
+zstd = "0.14.3"
