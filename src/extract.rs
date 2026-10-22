@@ -12,6 +12,8 @@ use crate::win32;
 use crate::{CANCEL, DEMO_MAGIC, EXTRACTING, MAX_FILENAME_LEN, Paths};
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+const BZIP2_MAGIC: &[u8; 3] = b"BZh";
+const BZIP2_BLOCK_MAGIC: [u8; 6] = [0x31, 0x41, 0x59, 0x26, 0x53, 0x59];
 const CONTENT_CHECKSUM_FLAG: u8 = 0x04;
 const COPY_BUFFER: usize = 1024 * 1024;
 const HEADER_BUFFER: usize = 8 * 1024;
@@ -29,12 +31,34 @@ pub enum ExtractResult {
 enum CopyError {
     Open(String),
     Io(io::Error),
-    Zstd(String),
+    Codec(ArchiveFormat, String),
     Magic,
     Cancelled,
 }
 
-struct ZstdHeader {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveFormat {
+    Zstd,
+    Bzip2,
+}
+
+impl ArchiveFormat {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Zstd => "Zstandard",
+            Self::Bzip2 => "Bzip2",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Zstd => ".zst",
+            Self::Bzip2 => ".bz2",
+        }
+    }
+}
+
+struct ArchiveHeader {
     has_checksum: bool,
     content_size: Option<u64>,
 }
@@ -88,12 +112,35 @@ fn report_magic_failure(head: &[u8]) {
     );
 }
 
-fn report_zstd_failure(message: &str) {
-    error(format!("Zstandard decompression failed ({message})."));
+fn report_codec_failure(format: ArchiveFormat, message: &str) {
+    error(format!(
+        "{} decompression failed ({}).",
+        format.name(),
+        message
+    ));
     println!(
         "  {}",
-        output::muted("The file does not look like a valid .zst archive.")
+        output::muted(format!(
+            "The file does not look like a valid {} archive.",
+            format.extension()
+        ))
     );
+    println!(
+        "  {}",
+        output::muted("Nothing was overwritten; the original archive was kept.")
+    );
+}
+
+fn report_unrecognized_format(head: &[u8]) {
+    error("the archive format is not recognized; the archive was rejected.");
+    println!(
+        "{}",
+        output::field(
+            "Expected",
+            output::muted("a .zst (Zstandard) or .bz2 (bzip2) archive")
+        )
+    );
+    println!("{}", output::field("Actual header", hex_preview(head)));
     println!(
         "  {}",
         output::muted("Nothing was overwritten; the original archive was kept.")
@@ -118,7 +165,7 @@ fn report_decode_failure(copy_error: CopyError, head: &[u8], output_dir: &Path) 
         CopyError::Open(message) => error(format!("could not open the archive: {message}")),
         CopyError::Magic => report_magic_failure(head),
         CopyError::Cancelled => return ExtractResult::Cancelled,
-        CopyError::Zstd(message) => report_zstd_failure(&message),
+        CopyError::Codec(format, message) => report_codec_failure(format, &message),
         CopyError::Io(err) if err.kind() == io::ErrorKind::PermissionDenied => {
             report_permission_denied(output_dir);
         }
@@ -179,7 +226,7 @@ fn skip_exact(reader: &mut BufReader<File>, remaining: u64) -> io::Result<()> {
     reader.seek_relative(offset)
 }
 
-fn inspect_zstd_header(input: &Path) -> Result<ZstdHeader, HeaderError> {
+fn inspect_zstd_header(input: &Path) -> Result<ArchiveHeader, HeaderError> {
     let file = File::open(input).map_err(HeaderError::Open)?;
     let file_len = file.metadata().map_err(HeaderError::Read)?.len();
     let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
@@ -274,15 +321,117 @@ fn inspect_zstd_header(input: &Path) -> Result<ZstdHeader, HeaderError> {
         return Err(HeaderError::Format("unexpected end of file"));
     }
 
-    Ok(ZstdHeader {
+    Ok(ArchiveHeader {
         has_checksum,
         content_size,
     })
 }
 
-fn check_zstd_header(input: &Path) -> Option<ZstdHeader> {
-    match inspect_zstd_header(input) {
-        Ok(header) => Some(header),
+fn read_available(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize, HeaderError> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match reader.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(ref err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(filled)
+}
+
+enum DetectedFormat {
+    Zstd,
+    Bzip2,
+    Unrecognized { head: Vec<u8> },
+}
+
+fn detect_format(input: &Path) -> Result<DetectedFormat, HeaderError> {
+    let file = File::open(input).map_err(HeaderError::Open)?;
+    let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
+    let mut head = [0u8; 4];
+    let filled = read_available(&mut reader, &mut head)?;
+
+    if filled != head.len() {
+        return Ok(DetectedFormat::Unrecognized {
+            head: head[..filled].to_vec(),
+        });
+    }
+    if head == ZSTD_MAGIC {
+        return Ok(DetectedFormat::Zstd);
+    }
+    if head.starts_with(BZIP2_MAGIC) && (b'1'..=b'9').contains(&head[3]) {
+        return Ok(DetectedFormat::Bzip2);
+    }
+    if matches!(head, [0x50..=0x5F, 0x2A, 0x4D, 0x18]) {
+        // a zstd stream may start with skippable frames; the frame parser
+        // itself decides whether what follows is actually valid
+        return Ok(DetectedFormat::Zstd);
+    }
+    Ok(DetectedFormat::Unrecognized {
+        head: head.to_vec(),
+    })
+}
+
+fn inspect_bzip2_header(input: &Path) -> Result<ArchiveHeader, HeaderError> {
+    let file = File::open(input).map_err(HeaderError::Open)?;
+    let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
+
+    // detect_format already checked the "BZh" + level-digit magic; the first
+    // compressed block signature separates real streams from look-alikes
+    // before anything is written.
+    let mut head = [0u8; 10];
+    let filled = read_available(&mut reader, &mut head)?;
+    if filled < head.len()
+        || !head.starts_with(BZIP2_MAGIC)
+        || !(b'1'..=b'9').contains(&head[3])
+        || head[4..] != BZIP2_BLOCK_MAGIC
+    {
+        return Err(HeaderError::Format("invalid block header"));
+    }
+
+    // block CRCs and the combined stream CRC are verified by the decoder as
+    // the file is read, and a file cut short mid-block fails with an
+    // unexpected end of file; the decompressed length is unknown by design,
+    // so the free-space pre-check is skipped and the progress bar prints the
+    // amount decoded without a total.
+    Ok(ArchiveHeader {
+        has_checksum: true,
+        content_size: None,
+    })
+}
+
+fn check_header(input: &Path) -> Option<(ArchiveFormat, ArchiveHeader)> {
+    let format = match detect_format(input) {
+        Ok(DetectedFormat::Zstd) => ArchiveFormat::Zstd,
+        Ok(DetectedFormat::Bzip2) => ArchiveFormat::Bzip2,
+        Ok(DetectedFormat::Unrecognized { head }) => {
+            report_unrecognized_format(&head);
+            return None;
+        }
+        Err(err) => {
+            match err {
+                HeaderError::Open(err) => {
+                    error(format!("could not open the archive: {err}"));
+                }
+                HeaderError::Read(err) => {
+                    error(format!("could not read the archive header: {err}"));
+                }
+                HeaderError::Format(_) => {
+                    unreachable!("format detection never reports structural errors")
+                }
+            }
+            return None;
+        }
+    };
+
+    let inspected = match format {
+        ArchiveFormat::Zstd => inspect_zstd_header(input),
+        ArchiveFormat::Bzip2 => inspect_bzip2_header(input),
+    };
+
+    match inspected {
+        Ok(header) => Some((format, header)),
         Err(HeaderError::Open(err)) => {
             error(format!("could not open the archive: {err}"));
             None
@@ -292,7 +441,7 @@ fn check_zstd_header(input: &Path) -> Option<ZstdHeader> {
             None
         }
         Err(HeaderError::Format(message)) => {
-            report_zstd_failure(message);
+            report_codec_failure(format, message);
             None
         }
     }
@@ -300,6 +449,7 @@ fn check_zstd_header(input: &Path) -> Option<ZstdHeader> {
 
 fn copy_payload(
     reader: &mut impl Read,
+    format: ArchiveFormat,
     writer: &mut impl Write,
     buffer: &mut [u8],
     head: &mut Vec<u8>,
@@ -313,7 +463,7 @@ fn copy_payload(
 
         let read = reader
             .read(buffer)
-            .map_err(|err| CopyError::Zstd(err.to_string()))?;
+            .map_err(|err| CopyError::Codec(format, err.to_string()))?;
         if read == 0 {
             break;
         }
@@ -336,27 +486,51 @@ fn copy_payload(
 
 fn decode_archive(
     input: &Path,
+    format: ArchiveFormat,
     writer: &mut impl Write,
     content_size: Option<u64>,
     head: &mut Vec<u8>,
 ) -> Result<u64, CopyError> {
     let file = File::open(input).map_err(|err| CopyError::Open(err.to_string()))?;
-    let mut decoder = zstd::stream::read::Decoder::new(BufReader::with_capacity(COPY_BUFFER, file))
-        .map_err(|err| CopyError::Zstd(err.to_string()))?;
+    let reader = BufReader::with_capacity(COPY_BUFFER, file);
 
     let mut buffer = vec![0u8; COPY_BUFFER];
     let mut total = 0;
     let mut progress = output::Progress::new(content_size);
     progress.update(0);
 
-    let result = copy_payload(
-        &mut decoder,
-        writer,
-        &mut buffer,
-        head,
-        &mut total,
-        &mut progress,
-    );
+    let result = match format {
+        ArchiveFormat::Zstd => {
+            let mut decoder = zstd::stream::read::Decoder::new(reader)
+                .map_err(|err| CopyError::Codec(format, err.to_string()))?;
+            copy_payload(
+                &mut decoder,
+                format,
+                writer,
+                &mut buffer,
+                head,
+                &mut total,
+                &mut progress,
+            )
+        }
+        ArchiveFormat::Bzip2 => {
+            // MultiBzDecoder verifies every block CRC, the combined stream
+            // CRC and each stream's end marker while decoding, and reports
+            // "decompression not finished but EOF reached" when a file was
+            // cut short mid-block. Concatenated (pbzip2-style) streams are
+            // decoded back to back.
+            let mut decoder = bzip2::bufread::MultiBzDecoder::new(reader);
+            copy_payload(
+                &mut decoder,
+                format,
+                writer,
+                &mut buffer,
+                head,
+                &mut total,
+                &mut progress,
+            )
+        }
+    };
     drop(progress);
 
     result?;
@@ -419,7 +593,7 @@ pub fn extract_one(
         return ExtractResult::Failed;
     }
 
-    let Some(header) = check_zstd_header(input) else {
+    let Some((format, header)) = check_header(input) else {
         return ExtractResult::Failed;
     };
     let has_checksum = header.has_checksum;
@@ -466,7 +640,7 @@ pub fn extract_one(
     let mut head = Vec::with_capacity(DEMO_MAGIC.len());
     let copy_result = {
         let mut writer = BufWriter::with_capacity(COPY_BUFFER, temp.as_file_mut());
-        let decoded = decode_archive(input, &mut writer, content_size, &mut head);
+        let decoded = decode_archive(input, format, &mut writer, content_size, &mut head);
         match decoded {
             Ok(total) => match writer.flush() {
                 Ok(()) => Ok(total),
@@ -575,7 +749,7 @@ pub fn test_archive(input: &Path) -> ExtractResult {
         return ExtractResult::Failed;
     }
 
-    let Some(header) = check_zstd_header(input) else {
+    let Some((format, header)) = check_header(input) else {
         return ExtractResult::Failed;
     };
 
@@ -585,7 +759,7 @@ pub fn test_archive(input: &Path) -> ExtractResult {
     let mut head = Vec::with_capacity(DEMO_MAGIC.len());
     let mut sink = io::sink();
 
-    match decode_archive(input, &mut sink, header.content_size, &mut head) {
+    match decode_archive(input, format, &mut sink, header.content_size, &mut head) {
         Ok(total) => {
             if head.len() < DEMO_MAGIC.len() {
                 report_magic_failure(&head);
@@ -593,21 +767,24 @@ pub fn test_archive(input: &Path) -> ExtractResult {
                 return ExtractResult::Failed;
             }
 
-            if !header.has_checksum {
-                warn(
-                    "one or more archive frames have no XXH64 checksum; integrity could not be fully verified",
-                );
-                println!(
-                    "{}",
-                    output::field("Result", output::caution("not verified"))
-                );
-                return ExtractResult::Failed;
-            }
+            let checksum = match format {
+                ArchiveFormat::Zstd => {
+                    if !header.has_checksum {
+                        warn(
+                            "one or more archive frames have no XXH64 checksum; integrity could not be fully verified",
+                        );
+                        println!(
+                            "{}",
+                            output::field("Result", output::caution("not verified"))
+                        );
+                        return ExtractResult::Failed;
+                    }
+                    "XXH64 verified"
+                }
+                ArchiveFormat::Bzip2 => "CRC32 verified",
+            };
 
-            println!(
-                "{}",
-                output::field("Checksum", output::good("XXH64 verified"))
-            );
+            println!("{}", output::field("Checksum", output::good(checksum)));
             println!(
                 "{}",
                 output::field(
@@ -886,7 +1063,7 @@ mod tests {
         encoder.write_all(payload).unwrap();
         encoder.finish().unwrap();
 
-        let header = check_zstd_header(&input).expect("zstd header");
+        let (_, header) = check_header(&input).expect("zstd header");
 
         assert!(header.has_checksum);
         assert_eq!(header.content_size, Some(payload.len() as u64));
@@ -899,7 +1076,7 @@ mod tests {
         let payload = vec![0xAB; 4096];
         fs::write(&input, zstd_frame(&payload, true)).unwrap();
 
-        let header = check_zstd_header(&input).expect("zstd header");
+        let (_, header) = check_header(&input).expect("zstd header");
 
         assert_eq!(header.content_size, Some(payload.len() as u64));
     }
@@ -915,7 +1092,7 @@ mod tests {
         bytes.extend(zstd_frame(second, true));
         fs::write(&input, bytes).unwrap();
 
-        let header = check_zstd_header(&input).expect("zstd header");
+        let (_, header) = check_header(&input).expect("zstd header");
 
         assert!(header.has_checksum);
         assert_eq!(
@@ -935,7 +1112,7 @@ mod tests {
         bytes.extend(zstd_frame(second, false));
         fs::write(&input, bytes).unwrap();
 
-        let header = check_zstd_header(&input).expect("zstd header");
+        let (_, header) = check_header(&input).expect("zstd header");
 
         assert!(!header.has_checksum);
         assert_eq!(
@@ -956,7 +1133,7 @@ mod tests {
         bytes.extend(zstd_frame(payload, true));
         fs::write(&input, bytes).unwrap();
 
-        let header = check_zstd_header(&input).expect("zstd header");
+        let (_, header) = check_header(&input).expect("zstd header");
 
         assert!(header.has_checksum);
         assert_eq!(header.content_size, Some(payload.len() as u64));
@@ -1013,5 +1190,49 @@ mod tests {
         assert!(!stale.exists());
         assert!(fresh.exists());
         assert!(unrelated.exists());
+    }
+
+    fn bzip2_frame(payload: &[u8]) -> Vec<u8> {
+        let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
+        encoder.write_all(payload).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn bzip2_header_is_detected_with_inherent_checksums() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("demo.dem.bz2");
+        let payload = b"PBDEMS2\x00bzip demo payload";
+        fs::write(&input, bzip2_frame(payload)).unwrap();
+
+        let (format, header) = check_header(&input).expect("bzip2 header");
+
+        assert_eq!(format, ArchiveFormat::Bzip2);
+        assert!(header.has_checksum);
+        assert_eq!(header.content_size, None);
+    }
+
+    #[test]
+    fn bzip2_header_rejects_lookalikes() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("lookalike.bz2");
+
+        fs::write(&input, b"BZh9not-a-block-signature").unwrap();
+        assert!(check_header(&input).is_none());
+
+        fs::write(&input, b"BZh0").unwrap();
+        assert!(check_header(&input).is_none());
+
+        fs::write(&input, b"BZh").unwrap();
+        assert!(check_header(&input).is_none());
+    }
+
+    #[test]
+    fn unrecognized_headers_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("garbage.bin");
+
+        fs::write(&input, b"\x00\x01\x02\x03\x04").unwrap();
+        assert!(check_header(&input).is_none());
     }
 }

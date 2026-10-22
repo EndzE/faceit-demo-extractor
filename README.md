@@ -2,7 +2,7 @@
 
 Get your FACEIT demos into CS2 without digging through folders.
 
-FACEIT downloads arrive as compressed `.dem.zst` archives. This app unpacks the demo, checks that the download is intact, and places the finished `.dem` file in your CS2 `game\csgo` folder so you can play it right away.
+FACEIT downloads arrive as compressed `.dem.zst` or `.dem.bz2` archives. This app unpacks the demo, checks that the download is intact, and places the finished `.dem` file in your CS2 `game\csgo` folder so you can play it right away.
 
 ## What you need
 
@@ -25,14 +25,14 @@ The right-click menu lets you extract demos directly from Explorer without openi
 
 ### From the right-click menu
 
-1. Save or download your FACEIT `.dem.zst` archive.
+1. Save or download your FACEIT `.dem.zst` or `.dem.bz2` archive.
 2. Right-click the archive in Explorer.
 3. Choose **Extract to CS2 folder (1.dem)**.
 4. Wait for the confirmation message.
 
 ### By dragging and dropping
 
-You can also drag one or more `.dem.zst` archives onto `faceit-dem.exe`. The app extracts them in one batch.
+You can also drag one or more archives (`.dem.zst` or `.dem.bz2`) onto `faceit-dem.exe`. The app extracts them in one batch.
 
 ## Play the demo in CS2
 
@@ -54,7 +54,7 @@ If a demo with the chosen name already exists, the app automatically picks the n
 
 ## Original archives
 
-By default, the original `.zst` archive is permanently deleted after a successful extraction.
+By default, the original archive is permanently deleted after a successful extraction.
 
 If you want to keep your downloads, open `faceit-dem.exe` and turn on **Keep original archives**. You can also turn on **Use the Recycle Bin** if you want deleted archives to be recoverable.
 
@@ -65,7 +65,7 @@ A failed extraction never removes the archive or replaces an existing demo.
 Open `faceit-dem.exe` to change these options:
 
 - **Change demo filename** - choose the name used for extracted demos, such as `1.dem`
-- **Keep original archives** - keep `.zst` files after extraction
+- **Keep original archives** - keep `.zst` and `.bz2` archives after extraction
 - **Use the Recycle Bin** - move removed archives to the Recycle Bin
 
 ## Troubleshooting

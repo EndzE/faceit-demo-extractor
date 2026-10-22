@@ -33,6 +33,16 @@ fn write_archive(path: &Path, payload: &[u8], checksum: bool) {
     fs::write(path, archive_bytes(payload, checksum)).unwrap();
 }
 
+fn bzip2_archive_bytes(payload: &[u8]) -> Vec<u8> {
+    let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
+    encoder.write_all(payload).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn write_bzip2_archive(path: &Path, payload: &[u8]) {
+    fs::write(path, bzip2_archive_bytes(payload)).unwrap();
+}
+
 fn demo_payload(size: usize) -> Vec<u8> {
     let mut payload = DEMO_MAGIC.to_vec();
     payload.extend((0..size).map(|index| (index % 251) as u8));
@@ -999,7 +1009,7 @@ fn help_prints_usage() {
         .success()
         .stdout(predicate::str::contains("Usage"))
         .stdout(predicate::str::contains("faceit-dem --status"))
-        .stdout(predicate::str::contains("faceit-dem --test <demo.zst>"))
+        .stdout(predicate::str::contains("faceit-dem --test <archive>"))
         .stdout(predicate::str::contains("\u{1b}[").not());
 }
 
@@ -1286,4 +1296,155 @@ fn recycle_bin_moves_temp_file() {
 
     extract::delete_original(&path, true).unwrap();
     assert!(!path.exists());
+}
+
+#[test]
+fn extract_bz2_success_and_deletes_original() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("demo.dem.bz2");
+    let output = directory.path().join("1.dem");
+    let payload = demo_payload(65536);
+    write_bzip2_archive(&input, &payload);
+
+    let result = extract::extract_one(&input, &output, false, false);
+
+    assert_eq!(result, ExtractResult::Ok);
+    assert_eq!(fs::read(&output).unwrap(), payload);
+    assert!(!input.exists());
+    assert!(no_partial_files(directory.path()));
+}
+
+#[test]
+fn extract_bz2_truncated_archive_fails_cleanly() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("truncated.dem.bz2");
+    let output = directory.path().join("1.dem");
+    write_bzip2_archive(&input, &demo_payload(65536));
+
+    let bytes = fs::read(&input).unwrap();
+    fs::write(&input, &bytes[..bytes.len() / 2]).unwrap();
+    fs::write(&output, b"existing demo").unwrap();
+
+    let result = extract::extract_one(&input, &output, false, false);
+
+    assert_eq!(result, ExtractResult::Failed);
+    assert_eq!(fs::read(&output).unwrap(), b"existing demo");
+    assert!(input.exists());
+    assert!(no_partial_files(directory.path()));
+}
+
+#[test]
+fn extract_bz2_checksum_mismatch_fails_cleanly() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("corrupt.dem.bz2");
+    let output = directory.path().join("1.dem");
+    write_bzip2_archive(&input, &demo_payload(65536));
+
+    let mut bytes = fs::read(&input).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    fs::write(&input, &bytes).unwrap();
+    fs::write(&output, b"existing demo").unwrap();
+
+    let result = extract::extract_one(&input, &output, false, false);
+
+    assert_eq!(result, ExtractResult::Failed);
+    assert_eq!(fs::read(&output).unwrap(), b"existing demo");
+    assert!(input.exists());
+    assert!(no_partial_files(directory.path()));
+}
+
+#[test]
+fn extract_bz2_with_wrong_payload_keeps_target_and_archive() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("wrong.dem.bz2");
+    let output = directory.path().join("1.dem");
+    write_bzip2_archive(&input, b"NOTADEMO and more bytes");
+    fs::write(&output, b"existing demo").unwrap();
+
+    let result = extract::extract_one(&input, &output, false, false);
+
+    assert_eq!(result, ExtractResult::Failed);
+    assert_eq!(fs::read(&output).unwrap(), b"existing demo");
+    assert!(input.exists());
+    assert!(no_partial_files(directory.path()));
+}
+
+#[test]
+fn extract_bz2_multistream_decodes_all_streams() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("multi.dem.bz2");
+    let output = directory.path().join("1.dem");
+
+    let first = demo_payload(2048);
+    let second = demo_payload(4096);
+    let mut bytes = bzip2_archive_bytes(&first);
+    bytes.extend(bzip2_archive_bytes(&second));
+    fs::write(&input, bytes).unwrap();
+
+    let result = extract::extract_one(&input, &output, false, false);
+
+    assert_eq!(result, ExtractResult::Ok);
+    assert_eq!(fs::read(&output).unwrap(), [first, second].concat());
+    assert!(!input.exists());
+    assert!(no_partial_files(directory.path()));
+}
+
+#[test]
+fn extract_rejects_a_fake_bz2_before_writing() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("plain.bz2");
+    let output = directory.path().join("1.dem");
+    fs::write(&input, b"BZh9not-a-real-bzip2-stream").unwrap();
+    fs::write(&output, b"existing demo").unwrap();
+
+    let result = extract::extract_one(&input, &output, false, false);
+
+    assert_eq!(result, ExtractResult::Failed);
+    assert_eq!(fs::read(&output).unwrap(), b"existing demo");
+    assert!(input.exists());
+}
+
+#[test]
+fn batch_mode_extracts_mixed_formats() {
+    let directory = tempfile::tempdir().unwrap();
+    let inputs_dir = directory.path().join("in");
+    fs::create_dir(&inputs_dir).unwrap();
+
+    let zst = inputs_dir.join("demo0.zst");
+    let bz2 = inputs_dir.join("demo1.bz2");
+    write_archive(&zst, &demo_payload(256), true);
+    write_bzip2_archive(&bz2, &demo_payload(512));
+
+    let code = extract::run_extract_batch(
+        &[zst, bz2],
+        directory.path(),
+        "test",
+        &Config::defaults(),
+        false,
+    );
+
+    assert_eq!(code, 0);
+    assert!(directory.path().join("1_1.dem").exists());
+    assert!(directory.path().join("1_2.dem").exists());
+    assert!(!inputs_dir.join("demo0.zst").exists());
+    assert!(!inputs_dir.join("demo1.bz2").exists());
+}
+
+#[test]
+fn test_command_verifies_bz2() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("demo.dem.bz2");
+    write_bzip2_archive(&input, &demo_payload(4096));
+
+    cli(directory.path())
+        .arg("--test")
+        .arg(&input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CRC32 verified"))
+        .stdout(predicate::str::contains("passed"))
+        .stdout(predicate::str::contains("No files were written"));
+
+    assert!(input.exists());
 }

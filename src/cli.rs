@@ -146,22 +146,22 @@ pub fn usage() -> String {
         String::new(),
         format!(
             "  {}",
-            output::muted("Extract FACEIT .dem.zst demos straight into your CS2 folder.")
+            output::muted("Extract FACEIT .dem.zst or .dem.bz2 demos straight into your CS2 folder.")
         ),
         String::new(),
         output::section("Usage"),
         command_line("faceit-dem", "Open the interactive menu"),
         command_line(
-            "faceit-dem <demo.zst> [...]",
-            "Extract one or more archives",
+            "faceit-dem <archive> [...]",
+            "Extract one or more .dem.zst or .dem.bz2 files",
         ),
         command_line(
-            "faceit-dem -- <demo.zst> [...]",
+            "faceit-dem -- <archive> [...]",
             "Extract names that start with \"-\"",
         ),
         command_line("faceit-dem --status", "Show settings and current state"),
         command_line(
-            "faceit-dem --test <demo.zst>",
+            "faceit-dem --test <archive>",
             "Verify the archive checksum without writing",
         ),
         command_line("faceit-dem --install", "Add the Explorer right-click menu"),
@@ -192,7 +192,7 @@ pub fn usage() -> String {
             output::note("-")
         ),
         format!(
-            "  {} Original .zst files can be kept, recycled, or permanently deleted.",
+            "  {} Original archives (.zst and .bz2) can be kept, recycled, or permanently deleted.",
             output::note("-")
         ),
         String::new(),
@@ -263,26 +263,32 @@ pub fn status_lines(paths: &Paths) -> Vec<String> {
     lines.push(String::new());
     lines.push(output::section("Right-click menu"));
 
-    let installed = registry::context_menu_installed();
-    let command = registry::context_menu_command();
-
     lines.push(output::field(
         "Status",
-        if !installed {
-            output::muted("not installed")
-        } else if command.is_some() {
-            output::good("installed")
-        } else {
-            output::caution("needs repair")
+        match registry::context_menu_state() {
+            Some(true) => output::good("installed"),
+            Some(false) => output::caution("needs repair"),
+            None => output::muted("not installed"),
         },
     ));
 
-    if installed {
-        if let Some(label) = registry::context_menu_label() {
-            lines.push(output::field("Label", label));
+    for menu in registry::CTX_MENUS {
+        if !menu.installed() {
+            continue;
         }
-        if let Some(command) = command {
-            lines.push(output::field("Command", command));
+        if let Some(command) = menu.command() {
+            if let Some(label) = menu.label() {
+                lines.push(output::field(&format!("Menu {}", menu.extension), label));
+            }
+            lines.push(output::field(
+                &format!("Command {}", menu.extension),
+                command,
+            ));
+        } else {
+            lines.push(output::field(
+                &format!("Menu {}", menu.extension),
+                output::caution("needs repair"),
+            ));
         }
     }
 
@@ -312,7 +318,7 @@ fn menu_install(paths: &Paths) {
             println!("  {}", output::good("Installed."));
             println!(
                 "  {}",
-                output::muted("Right-click any .zst file in Explorer to extract it.")
+                output::muted("Right-click any .zst or .bz2 file in Explorer to extract it.")
             );
         }
         Err(message) => output::error(message),
@@ -406,12 +412,12 @@ fn menu_toggle_keep_zst(paths: &Paths) {
         Ok(()) => {
             if keep {
                 println!(
-                    "  {} Original .zst archives will be kept.",
+                    "  {} Original archives will be kept.",
                     output::good("On.")
                 );
             } else {
                 println!(
-                    "  {} Original .zst archives will be removed after extraction.",
+                    "  {} Original archives will be removed after extraction.",
                     output::caution("Off.")
                 );
             }
@@ -462,8 +468,7 @@ fn run_menu(paths: &Paths) -> i32 {
 
         let config = config::load_config(&paths.config);
         let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
-        let installed = registry::context_menu_installed();
-        let command = registry::context_menu_command();
+        let menu_state = registry::context_menu_state();
 
         println!("{}", output::banner());
         println!();
@@ -485,12 +490,10 @@ fn run_menu(paths: &Paths) -> i32 {
             "{}",
             output::field(
                 "Right-click",
-                if command.is_some() {
-                    output::good("installed")
-                } else if installed {
-                    output::caution("needs repair")
-                } else {
-                    output::muted("not installed")
+                match menu_state {
+                    Some(true) => output::good("installed"),
+                    Some(false) => output::caution("needs repair"),
+                    None => output::muted("not installed"),
                 }
             )
         );
@@ -499,12 +502,10 @@ fn run_menu(paths: &Paths) -> i32 {
         println!("{}", output::rule(output::RULE_WIDTH));
         println!();
 
-        let install_label = if command.is_some() {
-            "Reinstall right-click menu"
-        } else if installed {
-            "Repair right-click menu"
-        } else {
-            "Install right-click menu"
+        let install_label = match menu_state {
+            Some(true) => "Reinstall right-click menu",
+            Some(false) => "Repair right-click menu",
+            None => "Install right-click menu",
         };
 
         println!("{}", menu_option("1", install_label, None));
@@ -595,7 +596,7 @@ fn run_registry_action(flag: &str, paths: &Paths) -> i32 {
             if flag == "--install" {
                 println!(
                     "  {}",
-                    output::muted("Right-click any .zst file in Explorer to extract it.")
+                    output::muted("Right-click any .zst or .bz2 file in Explorer to extract it.")
                 );
             }
             0

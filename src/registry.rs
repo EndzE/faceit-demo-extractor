@@ -9,6 +9,45 @@ use crate::config;
 pub const CTX_KEY: &str = r"Software\Classes\SystemFileAssociations\.zst\shell\FaceitExtract";
 pub const CTX_COMMAND_KEY: &str =
     r"Software\Classes\SystemFileAssociations\.zst\shell\FaceitExtract\command";
+pub const CTX_BZ2_KEY: &str = r"Software\Classes\SystemFileAssociations\.bz2\shell\FaceitExtract";
+pub const CTX_BZ2_COMMAND_KEY: &str =
+    r"Software\Classes\SystemFileAssociations\.bz2\shell\FaceitExtract\command";
+
+/// Every extension whose Explorer right-click menu is installed and removed.
+pub const CTX_MENUS: &[ContextMenu] = &[
+    ContextMenu {
+        extension: ".zst",
+        key: CTX_KEY,
+        command_key: CTX_COMMAND_KEY,
+    },
+    ContextMenu {
+        extension: ".bz2",
+        key: CTX_BZ2_KEY,
+        command_key: CTX_BZ2_COMMAND_KEY,
+    },
+];
+
+/// One Explorer right-click menu registration.
+#[derive(Debug, Clone, Copy)]
+pub struct ContextMenu {
+    pub extension: &'static str,
+    pub key: &'static str,
+    pub command_key: &'static str,
+}
+
+impl ContextMenu {
+    pub fn installed(&self) -> bool {
+        reg_key_exists(self.key)
+    }
+
+    pub fn label(&self) -> Option<String> {
+        reg_default(self.key)
+    }
+
+    pub fn command(&self) -> Option<String> {
+        reg_default(self.command_key)
+    }
+}
 
 pub fn menu_label_for(target_filename: &str) -> String {
     format!("Extract to CS2 folder ({target_filename})")
@@ -47,15 +86,25 @@ fn reg_key_exists(subkey: &str) -> bool {
 }
 
 pub fn context_menu_command() -> Option<String> {
-    reg_default(CTX_COMMAND_KEY)
-}
-
-pub fn context_menu_label() -> Option<String> {
-    reg_default(CTX_KEY)
+    CTX_MENUS.iter().find_map(ContextMenu::command)
 }
 
 pub fn context_menu_installed() -> bool {
-    reg_key_exists(CTX_KEY)
+    CTX_MENUS.iter().any(ContextMenu::installed)
+}
+
+/// Overall right-click state: `None` when no menu is installed, `Some(true)`
+/// when every menu is installed with a command, `Some(false)` when at least
+/// one installed menu needs repair.
+pub fn context_menu_state() -> Option<bool> {
+    if !context_menu_installed() {
+        return None;
+    }
+    Some(
+        CTX_MENUS
+            .iter()
+            .all(|menu| menu.installed() && menu.command().is_some()),
+    )
 }
 
 pub fn install_context_menu_at(root: &str, label: &str, command: &str) -> Result<(), String> {
@@ -81,10 +130,6 @@ pub fn set_context_menu_label_at(root: &str, label: &str) -> Result<(), String> 
         .map_err(|err| err.to_string())
 }
 
-pub fn remove_context_menu() -> Result<(), String> {
-    remove_context_menu_at(CTX_KEY)
-}
-
 pub fn remove_context_menu_at(root: &str) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     match hkcu.delete_subkey_all(root) {
@@ -105,11 +150,17 @@ fn install_context_menu_with(paths: &Paths, root: &str) -> Result<(), String> {
 }
 
 pub fn perform_install(paths: &Paths) -> Result<(), String> {
-    install_context_menu_with(paths, CTX_KEY)
+    for menu in CTX_MENUS {
+        install_context_menu_with(paths, menu.key)?;
+    }
+    Ok(())
 }
 
 pub fn perform_remove() -> Result<(), String> {
-    remove_context_menu()
+    for menu in CTX_MENUS {
+        remove_context_menu_at(menu.key)?;
+    }
+    Ok(())
 }
 
 pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), String> {
@@ -125,5 +176,14 @@ pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), String> 
 }
 
 pub fn perform_update_label(paths: &Paths) -> Result<(), String> {
-    perform_update_label_at(paths, CTX_KEY)
+    let installed: Vec<&ContextMenu> = CTX_MENUS.iter().filter(|menu| menu.installed()).collect();
+    if installed.is_empty() {
+        return Err("the right-click menu is not installed; nothing to update".to_string());
+    }
+
+    for menu in installed {
+        perform_update_label_at(paths, menu.key)?;
+    }
+
+    Ok(())
 }
