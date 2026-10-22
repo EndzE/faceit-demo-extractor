@@ -2,7 +2,7 @@
 
 Get your FACEIT demos into CS2 without digging through folders.
 
-FACEIT downloads arrive as compressed `.dem.zst` or `.dem.bz2` archives. This app unpacks the demo, checks that the download is intact, and places the finished `.dem` file in your CS2 `game\csgo` folder so you can play it right away.
+FACEIT matches arrive as compressed `.dem.zst` archives, and demos downloaded directly from Valve's demo servers (a `replayNNN.valve.net/730/...` demo link) arrive as compressed `.dem.bz2` archives. This app unpacks both, checks that the download is intact, and places the finished `.dem` file in your CS2 `game\csgo` folder so you can play it right away.
 
 ## What you need
 
@@ -25,7 +25,7 @@ The right-click menu lets you extract demos directly from Explorer without openi
 
 ### From the right-click menu
 
-1. Save or download your FACEIT `.dem.zst` or `.dem.bz2` archive.
+1. Save or download the demo archive - `.dem.zst` from FACEIT, or `.dem.bz2` from a `replayNNN.valve.net` demo link.
 2. Right-click the archive in Explorer.
 3. Choose **Extract to CS2 folder (1.dem)**.
 4. Wait for the confirmation message.
