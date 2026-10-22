@@ -493,6 +493,27 @@ fn batch_mode_writes_first_free_slots() {
 }
 
 #[test]
+fn batch_mode_keeps_failed_archives() {
+    let directory = tempfile::tempdir().unwrap();
+    let good = directory.path().join("good.dem.zst");
+    let bad = directory.path().join("bad.dem.zst");
+    write_archive(&good, &demo_payload(512), true);
+    fs::write(&bad, b"not a zstd archive").unwrap();
+
+    let code = extract::run_extract_batch(
+        &[good, bad.clone()],
+        directory.path(),
+        "test",
+        &Config::defaults(),
+        false,
+    );
+
+    assert_eq!(code, 1);
+    assert!(directory.path().join("1_1.dem").exists());
+    assert!(bad.exists());
+}
+
+#[test]
 fn enqueue_writes_absolute_path_and_strips_quotes() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());

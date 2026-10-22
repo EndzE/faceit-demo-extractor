@@ -11,7 +11,6 @@ use crate::{CANCEL, Paths, WORKER_MODE, extract};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const IDLE_WINDOW: Duration = Duration::from_millis(700);
-const INITIAL_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_TOTAL: Duration = Duration::from_secs(60);
 const STARTUP_POLL: Duration = Duration::from_millis(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -156,7 +155,7 @@ fn discard_queued_files(paths: &Paths) {
 }
 
 pub fn collect_queued_files(paths: &Paths) -> Vec<PathBuf> {
-    collect_queued_files_with_timing(paths, IDLE_WINDOW, INITIAL_TIMEOUT, MAX_TOTAL)
+    collect_queued_files_with_timing(paths, IDLE_WINDOW, Duration::ZERO, MAX_TOTAL)
 }
 
 pub fn collect_queued_files_with_timing(

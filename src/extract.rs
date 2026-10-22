@@ -555,7 +555,7 @@ pub fn run_extract_batch(
     let total = files.len();
     let (stem, ext) = split_ext(target);
     let mut extracted: Vec<String> = Vec::new();
-    let mut failed: usize = 0;
+    let mut failed: Vec<&Path> = Vec::new();
 
     let _guard = ExtractingGuard::new();
 
@@ -579,7 +579,7 @@ pub fn run_extract_batch(
 
         match extract_one(input, &output_path, keep_zst, move_to_recycle_bin) {
             ExtractResult::Ok => extracted.push(out_name),
-            ExtractResult::Failed => failed += 1,
+            ExtractResult::Failed => failed.push(input),
             ExtractResult::Cancelled => {
                 output::cancelled();
                 return 130;
@@ -590,18 +590,34 @@ pub fn run_extract_batch(
     }
 
     let plural = if total == 1 { "" } else { "s" };
-    let result = format!("{} of {total} archive{plural} extracted", extracted.len());
+    let result = format!(
+        "{} of {total} archive{plural} extracted{}",
+        extracted.len(),
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!("; {} failed", failed.len())
+        }
+    );
     println!(
         "{}",
         output::field(
             "Result",
-            if failed == 0 {
+            if failed.is_empty() {
                 output::good(result)
             } else {
                 output::caution(result)
             }
         )
     );
+
+    if !failed.is_empty() {
+        println!();
+        println!("{}", output::section("Failed archives"));
+        for input in &failed {
+            println!("  {}", output::bad(input.display()));
+        }
+    }
 
     if !extracted.is_empty() {
         let stems: Vec<String> = extracted.iter().map(|name| split_ext(name).0).collect();
@@ -634,7 +650,7 @@ pub fn run_extract_batch(
         output::pause("Press Enter to close...");
     }
 
-    if failed == 0 { 0 } else { 1 }
+    if failed.is_empty() { 0 } else { 1 }
 }
 
 #[cfg(test)]
