@@ -69,6 +69,10 @@ fn dispatch(args: &[OsString]) -> i32 {
         return 0;
     }
 
+    if first == Some("--test") {
+        return run_test(&args[1..]);
+    }
+
     let paths = Paths::discover();
     let (ok, config_error) = config::ensure_config_file(&paths.config, true);
     if !ok {
@@ -113,6 +117,20 @@ fn dispatch(args: &[OsString]) -> i32 {
     }
 }
 
+fn run_test(args: &[OsString]) -> i32 {
+    if args.len() != 1 {
+        output::error("--test expects one archive path");
+        print!("{}", usage());
+        return 2;
+    }
+
+    match extract::test_archive(&PathBuf::from(&args[0])) {
+        extract::ExtractResult::Ok => 0,
+        extract::ExtractResult::Failed => 1,
+        extract::ExtractResult::Cancelled => 130,
+    }
+}
+
 fn command_line(command: &str, description: &str) -> String {
     format!(
         "  {}  {description}",
@@ -140,6 +158,10 @@ pub fn usage() -> String {
             "Extract names that start with \"-\"",
         ),
         command_line("faceit-dem --status", "Show settings and current state"),
+        command_line(
+            "faceit-dem --test <demo.zst>",
+            "Verify the archive checksum without writing",
+        ),
         command_line("faceit-dem --install", "Add the Explorer right-click menu"),
         command_line(
             "faceit-dem --remove",
@@ -178,7 +200,7 @@ pub fn usage() -> String {
             output::muted("File")
         ),
         format!(
-            "  {}  target_filename, keep_zst, move_to_recycle_bin",
+            "  {}  target_filename, keep_zst, move_to_recycle_bin, csgo_path",
             output::muted("Keys")
         ),
         String::new(),
@@ -189,8 +211,8 @@ pub fn usage() -> String {
 }
 
 pub fn status_lines(paths: &Paths) -> Vec<String> {
-    let (csgo, source) = cs2::find_cs2_csgo_path();
     let config = config::load_config(&paths.config);
+    let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref());
     let (worker_running, worker_pid) = queue::worker_state(paths);
 
     let mut lines = vec![
@@ -208,7 +230,7 @@ pub fn status_lines(paths: &Paths) -> Vec<String> {
         ),
     ];
 
-    if csgo.is_some() {
+    if csgo.is_some() || config.csgo_path.is_some() {
         lines.push(output::field("CS2 source", source));
     }
 
@@ -439,7 +461,7 @@ fn run_menu(paths: &Paths) -> i32 {
         first = false;
 
         let config = config::load_config(&paths.config);
-        let (csgo, _) = cs2::find_cs2_csgo_path();
+        let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref());
         let installed = registry::context_menu_installed();
         let command = registry::context_menu_command();
         let (worker_running, worker_pid) = queue::worker_state(paths);
@@ -456,6 +478,9 @@ fn run_menu(paths: &Paths) -> i32 {
                 }
             )
         );
+        if csgo.is_none() && config.csgo_path.is_some() {
+            println!("{}", output::field("CS2 source", output::caution(source)));
+        }
         println!("{}", output::field("Config", paths.config.display()));
         println!(
             "{}",

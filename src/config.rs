@@ -17,6 +17,7 @@ pub struct Config {
     pub target_filename: String,
     pub keep_zst: bool,
     pub move_to_recycle_bin: bool,
+    pub csgo_path: Option<String>,
 }
 
 impl Config {
@@ -25,6 +26,7 @@ impl Config {
             target_filename: DEFAULT_TARGET_FILENAME.to_string(),
             keep_zst: DEFAULT_KEEP_ZST,
             move_to_recycle_bin: DEFAULT_MOVE_TO_RECYCLE_BIN,
+            csgo_path: None,
         }
     }
 
@@ -36,6 +38,13 @@ impl Config {
             ),
             ("keep_zst", Value::Bool(self.keep_zst)),
             ("move_to_recycle_bin", Value::Bool(self.move_to_recycle_bin)),
+            (
+                "csgo_path",
+                self.csgo_path
+                    .clone()
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            ),
         ]
     }
 }
@@ -91,6 +100,19 @@ pub fn load_config(path: &Path) -> Config {
     config.keep_zst = coerce_bool(&data, "keep_zst", DEFAULT_KEEP_ZST);
     config.move_to_recycle_bin =
         coerce_bool(&data, "move_to_recycle_bin", DEFAULT_MOVE_TO_RECYCLE_BIN);
+    config.csgo_path = match data.get("csgo_path") {
+        Some(Value::String(path)) if !path.trim().is_empty() => {
+            Some(path.trim().trim_matches('"').to_string())
+        }
+        Some(Value::String(_)) | None | Some(Value::Null) => None,
+        Some(other) => {
+            warn_config_once(
+                "csgo_path",
+                format!("invalid \"csgo_path\" value {other} in config.json; ignoring it"),
+            );
+            None
+        }
+    };
 
     config
 }

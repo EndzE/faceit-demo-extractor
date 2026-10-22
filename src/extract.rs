@@ -26,6 +26,7 @@ pub enum ExtractResult {
 }
 
 enum CopyError {
+    Open(String),
     Io(io::Error),
     Zstd(String),
     Magic,
@@ -61,7 +62,7 @@ fn hex_preview(bytes: &[u8]) -> String {
 }
 
 fn report_magic_failure(head: &[u8]) {
-    error("the decompressed data is not a CS2 demo; extraction aborted.");
+    error("the decompressed data is not a CS2 demo; the archive was rejected.");
     println!("{}", output::field("Expected header", "PBDEMS2"));
     println!("{}", output::field("Actual header", hex_preview(head)));
     println!(
@@ -93,6 +94,20 @@ fn report_permission_denied(output_dir: &Path) {
         output::note("-"),
         output::strong(output_dir.display())
     );
+}
+
+fn report_decode_failure(copy_error: CopyError, head: &[u8], output_dir: &Path) -> ExtractResult {
+    match copy_error {
+        CopyError::Open(message) => error(format!("could not open the archive: {message}")),
+        CopyError::Magic => report_magic_failure(head),
+        CopyError::Cancelled => return ExtractResult::Cancelled,
+        CopyError::Zstd(message) => report_zstd_failure(&message),
+        CopyError::Io(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            report_permission_denied(output_dir);
+        }
+        CopyError::Io(err) => error(format!("could not write the demo: {err}")),
+    }
+    ExtractResult::Failed
 }
 
 fn report_disk_space_failure(output_dir: &Path, required: u64, available: u64) {
@@ -184,6 +199,35 @@ fn copy_payload(
     Ok(())
 }
 
+fn decode_archive(
+    input: &Path,
+    writer: &mut impl Write,
+    content_size: Option<u64>,
+    head: &mut Vec<u8>,
+) -> Result<u64, CopyError> {
+    let file = File::open(input).map_err(|err| CopyError::Open(err.to_string()))?;
+    let mut decoder = zstd::stream::read::Decoder::new(BufReader::with_capacity(COPY_BUFFER, file))
+        .map_err(|err| CopyError::Zstd(err.to_string()))?;
+
+    let mut buffer = vec![0u8; COPY_BUFFER];
+    let mut total = 0;
+    let mut progress = output::Progress::new(content_size);
+    progress.update(0);
+
+    let result = copy_payload(
+        &mut decoder,
+        writer,
+        &mut buffer,
+        head,
+        &mut total,
+        &mut progress,
+    );
+    drop(progress);
+
+    result?;
+    Ok(total)
+}
+
 pub fn extract_one(
     input: &Path,
     output: &Path,
@@ -237,60 +281,22 @@ pub fn extract_one(
         }
     };
 
-    let file = match File::open(input) {
-        Ok(file) => file,
-        Err(err) => {
-            error(format!("could not open the archive: {err}"));
-            return ExtractResult::Failed;
-        }
-    };
-
-    let mut decoder =
-        match zstd::stream::read::Decoder::new(BufReader::with_capacity(COPY_BUFFER, file)) {
-            Ok(decoder) => decoder,
-            Err(err) => {
-                report_zstd_failure(&err.to_string());
-                return ExtractResult::Failed;
-            }
-        };
-
-    let mut buffer = vec![0u8; COPY_BUFFER];
     let mut head = Vec::with_capacity(DEMO_MAGIC.len());
-    let mut total: u64 = 0;
-    let mut progress = output::Progress::new(content_size);
-    progress.update(0);
-
     let copy_result = {
         let mut writer = BufWriter::with_capacity(COPY_BUFFER, temp.as_file_mut());
-        let mut result = copy_payload(
-            &mut decoder,
-            &mut writer,
-            &mut buffer,
-            &mut head,
-            &mut total,
-            &mut progress,
-        );
-        if result.is_ok()
-            && let Err(err) = writer.flush()
-        {
-            result = Err(CopyError::Io(err));
+        let decoded = decode_archive(input, &mut writer, content_size, &mut head);
+        match decoded {
+            Ok(total) => match writer.flush() {
+                Ok(()) => Ok(total),
+                Err(err) => Err(CopyError::Io(err)),
+            },
+            Err(err) => Err(err),
         }
-        result
     };
-    drop(progress);
-
-    if let Err(copy_error) = copy_result {
-        match copy_error {
-            CopyError::Magic => report_magic_failure(&head),
-            CopyError::Cancelled => return ExtractResult::Cancelled,
-            CopyError::Zstd(message) => report_zstd_failure(&message),
-            CopyError::Io(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-                report_permission_denied(output_dir);
-            }
-            CopyError::Io(err) => error(format!("could not write the demo: {err}")),
-        }
-        return ExtractResult::Failed;
-    }
+    let total = match copy_result {
+        Ok(total) => total,
+        Err(copy_error) => return report_decode_failure(copy_error, &head, output_dir),
+    };
 
     if head.len() < DEMO_MAGIC.len() {
         report_magic_failure(&head);
@@ -370,6 +376,69 @@ pub fn extract_one(
     ExtractResult::Ok
 }
 
+pub fn test_archive(input: &Path) -> ExtractResult {
+    if !input.is_file() {
+        error(format!("input file not found: {}", input.display()));
+        return ExtractResult::Failed;
+    }
+
+    let Some(header) = check_zstd_header(input) else {
+        return ExtractResult::Failed;
+    };
+
+    println!("{}", output::field("Input", input.display()));
+
+    let _guard = ExtractingGuard::new();
+    let mut head = Vec::with_capacity(DEMO_MAGIC.len());
+    let mut sink = io::sink();
+
+    match decode_archive(input, &mut sink, header.content_size, &mut head) {
+        Ok(total) => {
+            if head.len() < DEMO_MAGIC.len() {
+                report_magic_failure(&head);
+                println!("{}", output::field("Result", output::bad("failed")));
+                return ExtractResult::Failed;
+            }
+
+            if !header.has_checksum {
+                warn("archive has no XXH64 checksum; integrity could not be verified");
+                println!(
+                    "{}",
+                    output::field("Result", output::caution("not verified"))
+                );
+                return ExtractResult::Failed;
+            }
+
+            println!(
+                "{}",
+                output::field("Checksum", output::good("XXH64 verified"))
+            );
+            println!(
+                "{}",
+                output::field(
+                    "Result",
+                    output::good(format!("passed ({} decoded)", output::format_size(total)))
+                )
+            );
+            println!("  {}", output::muted("No files were written."));
+            ExtractResult::Ok
+        }
+        Err(copy_error) => {
+            let output_dir = input
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let result = report_decode_failure(copy_error, &head, output_dir);
+            if result == ExtractResult::Cancelled {
+                output::cancelled();
+            } else {
+                println!("{}", output::field("Result", output::bad("failed")));
+            }
+            result
+        }
+    }
+}
+
 pub fn delete_original(path: &Path, use_recycle_bin: bool) -> Result<(), String> {
     if use_recycle_bin {
         return win32::recycle_file(path);
@@ -420,14 +489,30 @@ pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> 
         return 0;
     }
 
-    let (csgo, source) = cs2::find_cs2_csgo_path();
+    let config = config::load_config(&paths.config);
+    let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref());
     let Some(csgo) = csgo else {
         error("could not locate the CS2 game\\csgo folder.");
         println!("  {}", output::muted(&source));
         println!();
-        println!("{}", output::section("Locations checked"));
-        for (subkey, value_name) in CS2_REG_LOOKUP {
-            println!("  {} -> {value_name}", output::muted(subkey));
+        if config.csgo_path.is_some() {
+            println!(
+                "  {}",
+                output::muted(format!("Config: {}", paths.config.display()))
+            );
+            println!(
+                "  {}",
+                output::muted("Fix or remove \"csgo_path\" in config.json.")
+            );
+        } else {
+            println!("{}", output::section("Locations checked"));
+            for (subkey, value_name) in CS2_REG_LOOKUP {
+                println!("  {} -> {value_name}", output::muted(subkey));
+            }
+            println!(
+                "  {}",
+                output::muted("Set \"csgo_path\" in config.json to use a custom install.")
+            );
         }
         if pause_after {
             println!();
@@ -436,7 +521,6 @@ pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> 
         return 1;
     };
 
-    let config = config::load_config(&paths.config);
     run_extract_batch(files, &csgo, &source, &config, pause_after)
 }
 

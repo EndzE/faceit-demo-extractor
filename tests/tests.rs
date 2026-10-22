@@ -10,6 +10,7 @@ use winreg::RegKey;
 use winreg::enums::HKEY_CURRENT_USER;
 
 use faceit_demo_extractor::config::{self, Config};
+use faceit_demo_extractor::cs2;
 use faceit_demo_extractor::extract::{self, ExtractResult};
 use faceit_demo_extractor::queue;
 use faceit_demo_extractor::validate::{is_valid_filename, utf16_len};
@@ -139,7 +140,7 @@ fn config_falls_back_on_invalid_values() {
     let path = directory.path().join("config.json");
     fs::write(
         &path,
-        r#"{"target_filename": 7, "keep_zst": "yes", "move_to_recycle_bin": true}"#,
+        r#"{"target_filename": 7, "keep_zst": "yes", "move_to_recycle_bin": true, "csgo_path": 7}"#,
     )
     .unwrap();
 
@@ -147,6 +148,42 @@ fn config_falls_back_on_invalid_values() {
     assert_eq!(config.target_filename, "1.dem");
     assert!(!config.keep_zst);
     assert!(config.move_to_recycle_bin);
+    assert_eq!(config.csgo_path, None);
+}
+
+#[test]
+fn config_reads_csgo_path() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    fs::write(&path, r#"{"csgo_path": " C:\\CS2\\game\\csgo "}"#).unwrap();
+
+    let config = config::load_config(&path);
+    assert_eq!(config.csgo_path.as_deref(), Some(r"C:\CS2\game\csgo"));
+}
+
+#[test]
+fn csgo_path_override_resolves_install_and_csgo_folders() {
+    let directory = tempfile::tempdir().unwrap();
+    let csgo = directory.path().join("game").join("csgo");
+    fs::create_dir_all(&csgo).unwrap();
+
+    let (found, source) = cs2::find_cs2_csgo_path(Some(directory.path().to_str().unwrap()));
+    assert_eq!(found.as_deref(), Some(csgo.as_path()));
+    assert!(source.contains("csgo_path"));
+
+    let (found, _) = cs2::find_cs2_csgo_path(Some(csgo.to_str().unwrap()));
+    assert_eq!(found.as_deref(), Some(csgo.as_path()));
+}
+
+#[test]
+fn csgo_path_override_does_not_fall_back_to_registry_when_missing() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing");
+
+    let (found, source) = cs2::find_cs2_csgo_path(Some(missing.to_str().unwrap()));
+    assert!(found.is_none());
+    assert!(source.contains("csgo_path"));
+    assert!(source.contains("missing"));
 }
 
 #[test]
@@ -166,6 +203,7 @@ fn ensure_config_adds_missing_keys_only() {
     assert_eq!(saved["custom"], serde_json::Value::Bool(true));
     assert_eq!(saved["keep_zst"], serde_json::Value::Bool(false));
     assert_eq!(saved["move_to_recycle_bin"], serde_json::Value::Bool(false));
+    assert_eq!(saved["csgo_path"], serde_json::Value::Null);
 }
 
 #[test]
@@ -182,7 +220,8 @@ fn ensure_config_resets_invalid_json_and_non_object() {
         serde_json::json!({
             "target_filename": "1.dem",
             "keep_zst": false,
-            "move_to_recycle_bin": false
+            "move_to_recycle_bin": false,
+            "csgo_path": null
         })
     );
 
@@ -191,6 +230,35 @@ fn ensure_config_resets_invalid_json_and_non_object() {
     assert!(ok, "{error:?}");
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["target_filename"], serde_json::Value::from("1.dem"));
+}
+
+#[test]
+fn csgo_path_override_drives_extraction() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let install = directory.path().join("custom-cs2");
+    let csgo = install.join("game").join("csgo");
+    fs::create_dir_all(&csgo).unwrap();
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "target_filename": "1.dem",
+            "keep_zst": true,
+            "move_to_recycle_bin": false,
+            "csgo_path": install.to_string_lossy()
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let input = directory.path().join("demo.dem.zst");
+    let payload = demo_payload(4096);
+    write_archive(&input, &payload, true);
+
+    let code = extract::run_extract_mode(&paths, std::slice::from_ref(&input), false);
+    assert_eq!(code, 0);
+    assert_eq!(fs::read(csgo.join("1.dem")).unwrap(), payload);
+    assert!(input.exists());
 }
 
 #[test]
@@ -265,6 +333,49 @@ fn extract_without_checksum_succeeds() {
 
     assert_eq!(result, ExtractResult::Ok);
     assert_eq!(fs::read(&output).unwrap(), payload);
+}
+
+#[test]
+fn test_archive_verifies_checksum_without_writing() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("demo.dem.zst");
+    write_archive(&input, &demo_payload(4096), true);
+
+    let result = extract::test_archive(&input);
+
+    assert_eq!(result, ExtractResult::Ok);
+    assert!(input.exists());
+    assert!(no_partial_files(directory.path()));
+}
+
+#[test]
+fn test_archive_rejects_checksum_mismatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("corrupt.dem.zst");
+    write_archive(&input, &demo_payload(4096), true);
+
+    let mut bytes = fs::read(&input).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    fs::write(&input, &bytes).unwrap();
+
+    let result = extract::test_archive(&input);
+
+    assert_eq!(result, ExtractResult::Failed);
+    assert!(input.exists());
+    assert!(no_partial_files(directory.path()));
+}
+
+#[test]
+fn test_archive_rejects_archive_without_checksum() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("unchecked.dem.zst");
+    write_archive(&input, &demo_payload(4096), false);
+
+    let result = extract::test_archive(&input);
+
+    assert_eq!(result, ExtractResult::Failed);
+    assert!(input.exists());
 }
 
 #[test]
@@ -568,7 +679,61 @@ fn help_prints_usage() {
         .success()
         .stdout(predicate::str::contains("Usage"))
         .stdout(predicate::str::contains("faceit-dem --status"))
+        .stdout(predicate::str::contains("faceit-dem --test <demo.zst>"))
         .stdout(predicate::str::contains("\u{1b}[").not());
+}
+
+#[test]
+fn test_command_verifies_checksum() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("demo.dem.zst");
+    write_archive(&input, &demo_payload(4096), true);
+
+    Command::cargo_bin("faceit-dem")
+        .unwrap()
+        .arg("--test")
+        .arg(&input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("XXH64 verified"))
+        .stdout(predicate::str::contains("passed"))
+        .stdout(predicate::str::contains("No files were written"));
+
+    assert!(input.exists());
+}
+
+#[test]
+fn test_command_rejects_corrupted_archive() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("corrupt.dem.zst");
+    write_archive(&input, &demo_payload(4096), true);
+
+    let mut bytes = fs::read(&input).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    fs::write(&input, &bytes).unwrap();
+
+    Command::cargo_bin("faceit-dem")
+        .unwrap()
+        .arg("--test")
+        .arg(&input)
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("Result"))
+        .stdout(predicate::str::contains("failed"))
+        .stderr(predicate::str::contains("checksum"));
+
+    assert!(input.exists());
+}
+
+#[test]
+fn test_command_requires_one_archive() {
+    Command::cargo_bin("faceit-dem")
+        .unwrap()
+        .arg("--test")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--test expects one archive path"));
 }
 
 #[test]

@@ -59,7 +59,51 @@ pub fn read_reg_string(subkey: &str, value_name: &str) -> Option<String> {
     }
 }
 
-pub fn find_cs2_csgo_path() -> (Option<PathBuf>, String) {
+fn resolve_csgo_dir(path: &Path) -> PathBuf {
+    if path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("csgo"))
+    {
+        return path.to_path_buf();
+    }
+
+    let nested = path.join("game").join("csgo");
+    if nested.is_dir() {
+        return nested;
+    }
+
+    let direct = path.join("csgo");
+    if direct.is_dir() {
+        return direct;
+    }
+
+    nested
+}
+
+pub fn find_cs2_csgo_path(override_path: Option<&str>) -> (Option<PathBuf>, String) {
+    if let Some(value) = override_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let expanded = expand_env(value.trim_matches('"'));
+        let candidate = resolve_csgo_dir(Path::new(expanded.trim()));
+
+        if candidate.is_dir() {
+            return (
+                Some(candidate),
+                format!("config.json -> csgo_path = {value}"),
+            );
+        }
+
+        return (
+            None,
+            format!(
+                "config.json -> csgo_path = {value} points to a missing folder ({})",
+                candidate.display()
+            ),
+        );
+    }
+
     let mut attempts: Vec<String> = Vec::new();
 
     for &(subkey, value_name) in CS2_REG_LOOKUP {
