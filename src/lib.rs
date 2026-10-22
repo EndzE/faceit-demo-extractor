@@ -24,6 +24,7 @@ pub const MAX_FILENAME_LEN: usize = 255;
 
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
 pub static EXTRACTING: AtomicBool = AtomicBool::new(false);
+pub static WORKER_MODE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -74,6 +75,9 @@ impl Paths {
 }
 
 pub fn run_console() -> i32 {
+    #[cfg(windows)]
+    let _ = colored::control::set_virtual_terminal(true);
+
     install_ctrlc_handler();
 
     match std::panic::catch_unwind(cli::run) {
@@ -96,7 +100,7 @@ pub fn run_quiet() -> i32 {
             win32::message_box(
                 APP_NAME,
                 &format!(
-                    "ERROR: unexpected internal error: {}",
+                    "Unexpected internal error.\n\n{}",
                     panic_message(payload.as_ref())
                 ),
             );
@@ -108,10 +112,11 @@ pub fn run_quiet() -> i32 {
 fn install_ctrlc_handler() {
     let installed = ctrlc::set_handler(|| {
         CANCEL.store(true, Ordering::SeqCst);
-        if !EXTRACTING.load(Ordering::SeqCst) {
-            eprintln!("\nCancelled.");
-            std::process::exit(130);
+        if EXTRACTING.load(Ordering::SeqCst) || WORKER_MODE.load(Ordering::SeqCst) {
+            return;
         }
+        output::cancelled();
+        std::process::exit(130);
     });
 
     if installed.is_err() {

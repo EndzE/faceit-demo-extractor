@@ -6,7 +6,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Map, Value};
 
-use crate::output::{py_repr_json, py_repr_str, warn};
+use crate::output::{self, warn};
 use crate::validate::is_valid_filename;
 use crate::{DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN, DEFAULT_TARGET_FILENAME};
 
@@ -82,9 +82,7 @@ pub fn load_config(path: &Path) -> Config {
             warn_config_once(
                 "target_filename",
                 format!(
-                    "invalid \"target_filename\" value {} in config.json - using the default {}",
-                    py_repr_json(&name_value),
-                    py_repr_str(DEFAULT_TARGET_FILENAME)
+                    "invalid \"target_filename\" value {name_value} in config.json; using the default {DEFAULT_TARGET_FILENAME}"
                 ),
             );
         }
@@ -105,10 +103,7 @@ fn coerce_bool(data: &Map<String, Value>, key: &str, default: bool) -> bool {
             warn_config_once(
                 key,
                 format!(
-                    "invalid {} value {} in config.json - using the default {}",
-                    py_repr_str(key),
-                    py_repr_json(&other),
-                    if default { "True" } else { "False" }
+                    "invalid \"{key}\" value {other} in config.json; using the default {default}"
                 ),
             );
             default
@@ -148,7 +143,13 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>)
             match save_config(path, &Config::defaults().updates()) {
                 Ok(()) => {
                     if announce {
-                        println!("Created default config.json: {}", path.display());
+                        println!(
+                            "{}",
+                            output::field(
+                                "Config",
+                                output::good(format!("created {}", path.display()))
+                            )
+                        );
                     }
                     (true, None)
                 }
@@ -164,7 +165,7 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>)
         Ok(bytes) => match serde_json::from_slice::<Value>(strip_bom(&bytes)) {
             Err(err) => {
                 warn(format!(
-                    "config.json is not valid JSON ({err}) - resetting it to defaults"
+                    "config.json is not valid JSON ({err}); resetting it to defaults"
                 ));
                 match save_config(path, &Config::defaults().updates()) {
                     Ok(()) => (true, None),
@@ -192,8 +193,14 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>)
                     Ok(()) => {
                         if announce {
                             println!(
-                                "Updated config.json with missing setting(s): {}",
-                                missing.join(", ")
+                                "{}",
+                                output::field(
+                                    "Config",
+                                    format!(
+                                        "added missing setting(s): {}",
+                                        output::strong(missing.join(", "))
+                                    )
+                                )
                             );
                         }
                         (true, None)
@@ -202,7 +209,7 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>)
                 }
             }
             Ok(_) => {
-                warn("config.json does not contain a JSON object - resetting it to defaults");
+                warn("config.json does not contain a JSON object; resetting it to defaults");
                 match save_config(path, &Config::defaults().updates()) {
                     Ok(()) => (true, None),
                     Err(message) => (false, Some(message)),

@@ -18,6 +18,9 @@ use faceit_demo_extractor::{DEMO_MAGIC, MAX_FILENAME_LEN, Paths};
 fn write_archive(path: &Path, payload: &[u8], checksum: bool) {
     let file = File::create(path).unwrap();
     let mut encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+    encoder
+        .set_pledged_src_size(Some(payload.len() as u64))
+        .unwrap();
     encoder.include_checksum(checksum).unwrap();
     encoder.write_all(payload).unwrap();
     encoder.finish().unwrap();
@@ -40,7 +43,7 @@ fn no_partial_files(directory: &Path) -> bool {
 }
 
 #[test]
-fn filename_validation_matches_python_rules() {
+fn filename_validation_rejects_invalid_windows_names() {
     assert!(is_valid_filename("1.dem"));
     assert!(is_valid_filename("demo_2024.dem"));
     assert!(is_valid_filename("a\u{0080}b.dem"));
@@ -65,7 +68,7 @@ fn filename_validation_matches_python_rules() {
 }
 
 #[test]
-fn split_ext_matches_python_splitext() {
+fn split_ext_splits_extension() {
     assert_eq!(
         extract::split_ext("1.dem"),
         ("1".to_string(), ".dem".to_string())
@@ -83,6 +86,15 @@ fn split_ext_matches_python_splitext() {
         (".dem".to_string(), String::new())
     );
     assert_eq!(extract::split_ext("1."), ("1".to_string(), ".".to_string()));
+}
+
+#[test]
+fn available_space_reads_the_target_drive() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let available = faceit_demo_extractor::win32::available_space(directory.path()).unwrap();
+
+    assert!(available > 0);
 }
 
 #[test]
@@ -209,6 +221,9 @@ fn extract_concatenated_frames_succeeds() {
     let mut file = File::create(&input).unwrap();
     for payload in [&first, &second] {
         let mut encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+        encoder
+            .set_pledged_src_size(Some(payload.len() as u64))
+            .unwrap();
         encoder.include_checksum(true).unwrap();
         encoder.write_all(payload).unwrap();
         file = encoder.finish().unwrap();
@@ -551,8 +566,9 @@ fn help_prints_usage() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Usage:"))
-        .stdout(predicate::str::contains("faceit-dem --status"));
+        .stdout(predicate::str::contains("Usage"))
+        .stdout(predicate::str::contains("faceit-dem --status"))
+        .stdout(predicate::str::contains("\u{1b}[").not());
 }
 
 #[test]
@@ -583,8 +599,25 @@ fn status_prints_configuration() {
         .assert()
         .success()
         .stdout(predicate::str::contains("FACEIT Demo Extractor"))
-        .stdout(predicate::str::contains("zstd          : bundled"))
-        .stdout(predicate::str::contains("target_filename"));
+        .stdout(predicate::str::contains("Runtime"))
+        .stdout(predicate::str::contains("Target demo"))
+        .stdout(predicate::str::contains("Right-click menu"))
+        .stdout(predicate::str::contains("\u{1b}[").not());
+}
+
+#[test]
+fn menu_renders_and_exits_cleanly() {
+    Command::cargo_bin("faceit-dem")
+        .unwrap()
+        .write_stdin("0\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Change demo filename"))
+        .stdout(predicate::str::contains("Keep original archives"))
+        .stdout(predicate::str::contains("Use the Recycle Bin"))
+        .stdout(predicate::str::contains("Select an option [0-5]"))
+        .stdout(predicate::str::contains("Goodbye."))
+        .stdout(predicate::str::contains("\u{1b}[").not());
 }
 
 #[test]
@@ -594,7 +627,8 @@ fn missing_file_exits_one() {
         .arg("definitely-missing-demo.zst")
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("ERROR:"));
+        .stderr(predicate::str::contains("error:"))
+        .stderr(predicate::str::contains("\u{1b}[").not());
 }
 
 #[test]

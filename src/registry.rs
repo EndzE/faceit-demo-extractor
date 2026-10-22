@@ -26,7 +26,7 @@ pub fn ensure_quiet_exe(paths: &Paths) -> Result<(), String> {
     }
 
     Err(format!(
-        "faceit-dem-quiet.exe was not found next to this executable (expected: {}). Build or copy the quiet binary first.",
+        "faceit-dem-quiet.exe was not found next to this executable.\nExpected: {}\n\nBuild or copy the quiet binary first.",
         quiet.display()
     ))
 }
@@ -113,7 +113,7 @@ pub fn perform_update_label(paths: &Paths) -> Result<(), String> {
         if context_menu_installed() {
             return perform_install(paths);
         }
-        return Err("the context-menu entry is not installed (nothing to update)".to_string());
+        return Err("the right-click menu is not installed; nothing to update".to_string());
     }
 
     let target = config::load_config(&paths.config).target_filename;

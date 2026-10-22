@@ -4,7 +4,6 @@ use winreg::RegKey;
 use winreg::RegValue;
 use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY, RegType};
 
-use crate::output::py_repr_str;
 use crate::win32::expand_env;
 
 pub const CS2_REG_LOOKUP: &[(&str, &str)] = &[
@@ -65,10 +64,7 @@ pub fn find_cs2_csgo_path() -> (Option<PathBuf>, String) {
 
     for &(subkey, value_name) in CS2_REG_LOOKUP {
         let Some(raw) = read_reg_string(subkey, value_name) else {
-            attempts.push(format!(
-                "HKLM\\{subkey} -> value {} not present",
-                py_repr_str(value_name)
-            ));
+            attempts.push(format!("HKLM\\{subkey} -> value {value_name} not present"));
             continue;
         };
 
@@ -80,8 +76,7 @@ pub fn find_cs2_csgo_path() -> (Option<PathBuf>, String) {
         }
 
         attempts.push(format!(
-            "HKLM\\{subkey} -> {} points to a missing folder ({})",
-            py_repr_str(&raw),
+            "HKLM\\{subkey} -> {value_name} = {raw} points to a missing folder ({})",
             csgo.display()
         ));
     }

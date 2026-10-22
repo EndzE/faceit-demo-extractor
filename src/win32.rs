@@ -2,6 +2,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Threading::{
     CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
@@ -42,6 +43,22 @@ pub fn recycle_file(path: &Path) -> Result<(), String> {
     }
 
     Err(format!("SHFileOperationW returned {result}"))
+}
+
+pub fn available_space(path: &Path) -> Result<u64, String> {
+    let directory: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut available = 0u64;
+
+    unsafe {
+        GetDiskFreeSpaceExW(PCWSTR(directory.as_ptr()), Some(&mut available), None, None)
+            .map_err(|err| err.to_string())?;
+    }
+
+    Ok(available)
 }
 
 pub fn expand_env(value: &str) -> String {

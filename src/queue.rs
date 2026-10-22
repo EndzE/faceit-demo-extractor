@@ -2,11 +2,12 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::output;
-use crate::{APP_NAME, Paths, extract};
+use crate::{CANCEL, Paths, WORKER_MODE, extract};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const IDLE_WINDOW: Duration = Duration::from_millis(700);
@@ -14,6 +15,22 @@ const INITIAL_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_TOTAL: Duration = Duration::from_secs(60);
 const STARTUP_POLL: Duration = Duration::from_millis(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const CANCEL_GRACE: Duration = Duration::from_millis(1000);
+
+struct WorkerModeGuard;
+
+impl WorkerModeGuard {
+    fn new() -> Self {
+        WORKER_MODE.store(true, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for WorkerModeGuard {
+    fn drop(&mut self) {
+        WORKER_MODE.store(false, Ordering::SeqCst);
+    }
+}
 
 pub enum ContextMenuError {
     Usage(String),
@@ -127,6 +144,17 @@ pub fn has_queued_files(paths: &Paths) -> bool {
         .unwrap_or(false)
 }
 
+fn discard_queued_files(paths: &Paths) {
+    let deadline = Instant::now() + CANCEL_GRACE;
+    loop {
+        let _ = take_queue_files(paths);
+        if Instant::now() >= deadline {
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+}
+
 pub fn collect_queued_files(paths: &Paths) -> Vec<PathBuf> {
     collect_queued_files_with_timing(paths, IDLE_WINDOW, INITIAL_TIMEOUT, MAX_TOTAL)
 }
@@ -142,6 +170,10 @@ pub fn collect_queued_files_with_timing(
     let mut last = start;
 
     loop {
+        if CANCEL.load(Ordering::SeqCst) {
+            break;
+        }
+
         let batch = take_queue_files(paths);
 
         if !batch.is_empty() {
@@ -246,7 +278,7 @@ pub fn spawn_worker(paths: &Paths) -> Result<(), String> {
     let exe = paths.exe_dir.join("faceit-dem.exe");
     if !exe.is_file() {
         return Err(format!(
-            "faceit-dem.exe was not found next to this executable: {}",
+            "faceit-dem.exe was not found next to this executable.\nExpected: {}",
             exe.display()
         ));
     }
@@ -257,7 +289,7 @@ pub fn spawn_worker(paths: &Paths) -> Result<(), String> {
 pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), ContextMenuError> {
     if files.is_empty() {
         return Err(ContextMenuError::Usage(
-            "no file provided for --context-menu".to_string(),
+            "no file was provided for --context-menu".to_string(),
         ));
     }
 
@@ -266,7 +298,7 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
 
     if queued == 0 {
         return Err(ContextMenuError::Usage(
-            "no valid file(s) were queued".to_string(),
+            "no valid files were queued".to_string(),
         ));
     }
 
@@ -290,8 +322,11 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
 }
 
 pub fn run_worker(paths: &Paths) -> i32 {
+    let worker_mode = WorkerModeGuard::new();
+
     if let Err(err) = ensure_queue_dir(paths) {
         output::error(format!("could not create the queue directory: {err}"));
+        drop(worker_mode);
         output::pause("Press Enter to close...");
         return 1;
     }
@@ -300,7 +335,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         return 0;
     };
 
-    println!("{APP_NAME}");
+    println!("{}", output::banner());
     write_worker_pid(paths);
 
     let mut any_failed = false;
@@ -308,6 +343,13 @@ pub fn run_worker(paths: &Paths) -> i32 {
 
     loop {
         let files = collect_queued_files(paths);
+
+        if CANCEL.load(Ordering::SeqCst) {
+            output::cancelled();
+            discard_queued_files(paths);
+            cleanup_own_worker_pid(paths);
+            return 130;
+        }
 
         if files.is_empty() {
             drop(lock);
@@ -333,6 +375,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         let code = extract::run_extract_mode(paths, &files, false);
 
         if code == 130 {
+            discard_queued_files(paths);
             cleanup_own_worker_pid(paths);
             return 130;
         }
@@ -342,9 +385,10 @@ pub fn run_worker(paths: &Paths) -> i32 {
     }
 
     if !processed_any {
-        println!("No queued files were found.");
+        println!("  {}", output::muted("No queued files were found."));
     }
 
+    drop(worker_mode);
     output::pause("Press Enter to close...");
 
     if any_failed { 1 } else { 0 }

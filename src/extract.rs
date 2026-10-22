@@ -6,13 +6,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{self, Config};
 use crate::cs2;
-use crate::output::{self, bytes_repr, error, warn};
+use crate::output::{self, error, warn};
 use crate::validate::utf16_len;
 use crate::win32;
-use crate::{APP_NAME, CANCEL, DEMO_MAGIC, EXTRACTING, MAX_FILENAME_LEN, Paths};
+use crate::{CANCEL, DEMO_MAGIC, EXTRACTING, MAX_FILENAME_LEN, Paths};
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const CONTENT_CHECKSUM_FLAG: u8 = 0x04;
+const HEADER_PROBE: usize = 32;
 const COPY_BUFFER: usize = 1024 * 1024;
 
 pub const CS2_REG_LOOKUP: &[(&str, &str)] = cs2::CS2_REG_LOOKUP;
@@ -31,6 +32,11 @@ enum CopyError {
     Cancelled,
 }
 
+struct ZstdHeader {
+    has_checksum: bool,
+    content_size: Option<u64>,
+}
+
 struct ExtractingGuard;
 
 impl ExtractingGuard {
@@ -46,56 +52,100 @@ impl Drop for ExtractingGuard {
     }
 }
 
+fn hex_preview(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn report_magic_failure(head: &[u8]) {
-    error("the decompressed data is not a CS2 demo - extraction aborted.");
+    error("the decompressed data is not a CS2 demo; extraction aborted.");
+    println!("{}", output::field("Expected header", "PBDEMS2"));
+    println!("{}", output::field("Actual header", hex_preview(head)));
     println!(
-        "  header check: expected {}, got {}",
-        bytes_repr(DEMO_MAGIC),
-        bytes_repr(head)
+        "  {}",
+        output::muted("Nothing was overwritten; the original archive was kept.")
     );
-    println!("  nothing was overwritten and the original archive was kept.");
 }
 
 fn report_zstd_failure(message: &str) {
-    error(format!("zstandard decompression failed ({message})."));
-    println!("  the input file is probably not a valid .zst archive; nothing");
-    println!("  was overwritten and the original archive was kept.");
+    error(format!("Zstandard decompression failed ({message})."));
+    println!(
+        "  {}",
+        output::muted("The file does not look like a valid .zst archive.")
+    );
+    println!(
+        "  {}",
+        output::muted("Nothing was overwritten; the original archive was kept.")
+    );
 }
 
 fn report_permission_denied(output_dir: &Path) {
-    error("permission denied.");
-    println!("  - close CS2 if it is currently reading the demo file");
-    println!("  - check that {} is writable", output_dir.display());
+    error("permission denied while writing the demo.");
+    println!(
+        "  {} Close CS2 if it is currently reading the demo.",
+        output::note("-")
+    );
+    println!(
+        "  {} Check that {} is writable.",
+        output::note("-"),
+        output::strong(output_dir.display())
+    );
 }
 
-fn check_zstd_header(input: &Path) -> Option<bool> {
+fn report_disk_space_failure(output_dir: &Path, required: u64, available: u64) {
+    error("not enough free space to extract the demo.");
+    println!(
+        "{}",
+        output::field("Required", output::strong(output::format_size(required)))
+    );
+    println!(
+        "{}",
+        output::field("Available", output::caution(output::format_size(available)))
+    );
+    println!(
+        "  {}",
+        output::muted(format!("Nothing was written to {}.", output_dir.display()))
+    );
+}
+
+fn check_zstd_header(input: &Path) -> Option<ZstdHeader> {
     let mut file = match File::open(input) {
         Ok(file) => file,
         Err(err) => {
-            error(err.to_string());
+            error(format!("could not open the archive: {err}"));
             return None;
         }
     };
 
-    let mut header = [0u8; 5];
-    match file.read_exact(&mut header) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+    let mut header = [0u8; HEADER_PROBE];
+    let read = match file.read(&mut header) {
+        Ok(read) if read >= 5 => read,
+        Ok(_) => {
             report_zstd_failure("unexpected end of file");
             return None;
         }
         Err(err) => {
-            error(err.to_string());
+            error(format!("could not read the archive header: {err}"));
             return None;
         }
-    }
+    };
 
     if header[..4] != ZSTD_MAGIC {
         report_zstd_failure("unknown frame descriptor");
         return None;
     }
 
-    Some(header[4] & CONTENT_CHECKSUM_FLAG != 0)
+    let content_size = zstd::zstd_safe::get_frame_content_size(&header[..read])
+        .ok()
+        .flatten();
+
+    Some(ZstdHeader {
+        has_checksum: header[4] & CONTENT_CHECKSUM_FLAG != 0,
+        content_size,
+    })
 }
 
 fn copy_payload(
@@ -104,6 +154,7 @@ fn copy_payload(
     buffer: &mut [u8],
     head: &mut Vec<u8>,
     total: &mut u64,
+    progress: &mut output::Progress,
 ) -> Result<(), CopyError> {
     loop {
         if CANCEL.load(Ordering::SeqCst) {
@@ -127,6 +178,7 @@ fn copy_payload(
 
         writer.write_all(&buffer[..read]).map_err(CopyError::Io)?;
         *total += read as u64;
+        progress.update(*total);
     }
 
     Ok(())
@@ -143,16 +195,32 @@ pub fn extract_one(
         return ExtractResult::Failed;
     }
 
-    let Some(has_checksum) = check_zstd_header(input) else {
+    let Some(header) = check_zstd_header(input) else {
         return ExtractResult::Failed;
     };
+    let has_checksum = header.has_checksum;
+    let content_size = header.content_size;
 
-    println!("Extracting to: {}", output.display());
+    println!("{}", output::field("Output", output.display()));
 
     let output_dir = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+
+    if let Some(required) = content_size {
+        match win32::available_space(output_dir) {
+            Ok(available) if available < required => {
+                report_disk_space_failure(output_dir, required, available);
+                return ExtractResult::Failed;
+            }
+            Ok(_) => {}
+            Err(err) => warn(format!(
+                "could not check free space in {}: {err}",
+                output_dir.display()
+            )),
+        }
+    }
 
     let mut temp = match tempfile::Builder::new()
         .prefix(".faceit-")
@@ -162,7 +230,7 @@ pub fn extract_one(
         Ok(temp) => temp,
         Err(err) => {
             error(format!(
-                "cannot create temporary file in {}: {err}",
+                "could not create a temporary file in {}: {err}",
                 output_dir.display()
             ));
             return ExtractResult::Failed;
@@ -172,7 +240,7 @@ pub fn extract_one(
     let file = match File::open(input) {
         Ok(file) => file,
         Err(err) => {
-            error(err.to_string());
+            error(format!("could not open the archive: {err}"));
             return ExtractResult::Failed;
         }
     };
@@ -189,6 +257,8 @@ pub fn extract_one(
     let mut buffer = vec![0u8; COPY_BUFFER];
     let mut head = Vec::with_capacity(DEMO_MAGIC.len());
     let mut total: u64 = 0;
+    let mut progress = output::Progress::new(content_size);
+    progress.update(0);
 
     let copy_result = {
         let mut writer = BufWriter::with_capacity(COPY_BUFFER, temp.as_file_mut());
@@ -198,6 +268,7 @@ pub fn extract_one(
             &mut buffer,
             &mut head,
             &mut total,
+            &mut progress,
         );
         if result.is_ok()
             && let Err(err) = writer.flush()
@@ -206,6 +277,7 @@ pub fn extract_one(
         }
         result
     };
+    drop(progress);
 
     if let Err(copy_error) = copy_result {
         match copy_error {
@@ -215,7 +287,7 @@ pub fn extract_one(
             CopyError::Io(err) if err.kind() == io::ErrorKind::PermissionDenied => {
                 report_permission_denied(output_dir);
             }
-            CopyError::Io(err) => error(err.to_string()),
+            CopyError::Io(err) => error(format!("could not write the demo: {err}")),
         }
         return ExtractResult::Failed;
     }
@@ -230,7 +302,7 @@ pub fn extract_one(
     let written = match temp.as_file().metadata() {
         Ok(metadata) => metadata.len(),
         Err(err) => {
-            error(err.to_string());
+            error(format!("could not inspect the temporary file: {err}"));
             return ExtractResult::Failed;
         }
     };
@@ -250,7 +322,7 @@ pub fn extract_one(
         if persist_error.error.kind() == io::ErrorKind::PermissionDenied {
             report_permission_denied(output_dir);
         } else {
-            error(persist_error.error.to_string());
+            error(format!("could not save the demo: {}", persist_error.error));
         }
         return ExtractResult::Failed;
     }
@@ -259,24 +331,30 @@ pub fn extract_one(
         return ExtractResult::Cancelled;
     }
 
-    println!("OK - extraction successful.");
+    println!("  {}  Extraction complete.", output::good("OK"));
 
     if !has_checksum {
         warn("archive has no checksum; only truncation and the demo header were verified");
     }
 
     if keep_zst {
-        println!("Original archive kept (keep_zst is enabled).");
+        println!("{}", output::field("Archive", output::muted("kept")));
         return ExtractResult::Ok;
     }
 
     match delete_original(input, move_to_recycle_bin) {
         Ok(()) => {
-            if move_to_recycle_bin {
-                println!("Original archive moved to the Recycle Bin.");
-            } else {
-                println!("Original archive permanently deleted.");
-            }
+            println!(
+                "{}",
+                output::field(
+                    "Archive",
+                    output::muted(if move_to_recycle_bin {
+                        "moved to Recycle Bin"
+                    } else {
+                        "deleted"
+                    })
+                )
+            );
         }
         Err(message) => {
             if move_to_recycle_bin {
@@ -338,8 +416,6 @@ pub fn next_free_name(folder: &Path, mut stem: String, ext: &str) -> String {
 }
 
 pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> i32 {
-    println!("{APP_NAME}");
-
     if files.is_empty() {
         return 0;
     }
@@ -347,12 +423,14 @@ pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> 
     let (csgo, source) = cs2::find_cs2_csgo_path();
     let Some(csgo) = csgo else {
         error("could not locate the CS2 game\\csgo folder.");
-        println!("  {source}");
-        println!("Checked (under HKEY_LOCAL_MACHINE):");
+        println!("  {}", output::muted(&source));
+        println!();
+        println!("{}", output::section("Locations checked"));
         for (subkey, value_name) in CS2_REG_LOOKUP {
-            println!("  - {subkey} -> {value_name}");
+            println!("  {} -> {value_name}", output::muted(subkey));
         }
         if pause_after {
+            println!();
             output::pause("Press Enter to close...");
         }
         return 1;
@@ -373,15 +451,22 @@ pub fn run_extract_batch(
     let keep_zst = config.keep_zst;
     let move_to_recycle_bin = config.move_to_recycle_bin;
 
-    println!("CS2 folder: {}   [{source}]", csgo.display());
-
-    if keep_zst {
-        println!("Original archives will be kept (keep_zst = true).");
-    } else if move_to_recycle_bin {
-        println!("Original archives will be moved to the Recycle Bin.");
-    } else {
-        println!("Original archives will be permanently deleted.");
-    }
+    println!("{}", output::field("CS2 folder", csgo.display()));
+    println!("{}", output::field("CS2 source", source));
+    println!(
+        "{}",
+        output::field(
+            "Archives",
+            if keep_zst {
+                output::good("keep originals")
+            } else if move_to_recycle_bin {
+                output::caution("move to Recycle Bin")
+            } else {
+                output::caution("delete originals")
+            }
+        )
+    );
+    println!();
 
     let total = files.len();
     let (stem, ext) = split_ext(target);
@@ -392,15 +477,18 @@ pub fn run_extract_batch(
 
     for (index, input) in files.iter().enumerate() {
         if CANCEL.load(Ordering::SeqCst) {
-            eprintln!("\nCancelled.");
+            output::cancelled();
             return 130;
         }
 
         let out_name = if total == 1 {
-            println!("Processing: {}", input.display());
+            println!("{}", output::field("Input", input.display()));
             target.clone()
         } else {
-            println!("[{}/{}] {}", index + 1, total, input.display());
+            println!(
+                "{}",
+                output::title(format!("[{}/{}] {}", index + 1, total, input.display()))
+            );
             next_free_name(csgo, stem.clone(), &ext)
         };
         let output_path = csgo.join(&out_name);
@@ -409,7 +497,7 @@ pub fn run_extract_batch(
             ExtractResult::Ok => extracted.push(out_name),
             ExtractResult::Failed => failed += 1,
             ExtractResult::Cancelled => {
-                eprintln!("\nCancelled.");
+                output::cancelled();
                 return 130;
             }
         }
@@ -418,33 +506,74 @@ pub fn run_extract_batch(
     }
 
     let plural = if total == 1 { "" } else { "s" };
+    let result = format!("{} of {total} archive{plural} extracted", extracted.len());
     println!(
-        "Result: {} of {total} archive{plural} extracted.",
-        extracted.len()
+        "{}",
+        output::field(
+            "Result",
+            if failed == 0 {
+                output::good(result)
+            } else {
+                output::caution(result)
+            }
+        )
     );
 
     if !extracted.is_empty() {
         let stems: Vec<String> = extracted.iter().map(|name| split_ext(name).0).collect();
 
-        if stems.len() == 1 {
-            println!("In the CS2 console type: playdemo \"{}\"", stems[0]);
-        } else {
-            let mut preview = stems
+        println!();
+        println!("{}", output::section("Play in CS2"));
+        println!(
+            "  {} {}",
+            output::muted("Console:"),
+            output::strong(format!("playdemo \"{}\"", stems[0]))
+        );
+
+        if stems.len() > 1 {
+            let mut others = stems
                 .iter()
+                .skip(1)
                 .take(5)
                 .map(|stem| format!("\"{stem}\""))
                 .collect::<Vec<_>>()
                 .join(", ");
-            if stems.len() > 5 {
-                preview.push_str(", ...");
+            if stems.len() > 6 {
+                others.push_str(", ...");
             }
-            println!("Extracted demos - in the CS2 console, e.g.: playdemo {preview}");
+            println!("  {} {others}", output::muted("Other demos:"));
         }
     }
 
     if pause_after {
+        println!();
         output::pause("Press Enter to close...");
     }
 
     if failed == 0 { 0 } else { 1 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_header_exposes_content_size_and_checksum() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("demo.dem.zst");
+        let payload = b"PBDEMS2\x00test demo payload";
+        let file = File::create(&input).unwrap();
+        let mut encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+        encoder
+            .set_pledged_src_size(Some(payload.len() as u64))
+            .unwrap();
+        encoder.include_checksum(true).unwrap();
+        encoder.write_all(payload).unwrap();
+        encoder.finish().unwrap();
+
+        let header = check_zstd_header(&input).expect("zstd header");
+
+        assert!(header.has_checksum);
+        assert_eq!(header.content_size, Some(payload.len() as u64));
+    }
 }
