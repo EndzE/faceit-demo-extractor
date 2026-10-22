@@ -67,14 +67,6 @@ pub fn field(name: &str, value: impl Display) -> String {
     format!("  {}  {value}", format!("{name:<16}").dimmed())
 }
 
-pub fn indented_field(indent: usize, name: &str, value: impl Display) -> String {
-    format!(
-        "{}{}  {value}",
-        " ".repeat(indent),
-        format!("{name:<16}").dimmed()
-    )
-}
-
 pub fn on_off(value: bool) -> String {
     if value {
         "on".green().to_string()
@@ -128,14 +120,19 @@ pub fn cancelled() {
 }
 
 pub fn pause(message: &str) {
-    if is_silent() || !io::stdin().is_terminal() {
+    if is_silent()
+        || std::env::var_os("FACEIT_DEMO_EXTRACTOR_TEST_NO_PAUSE").is_some()
+        || !io::stdin().is_terminal()
+    {
         return;
     }
 
+    crate::PAUSING.store(true, Ordering::SeqCst);
     print!("{}", message.dimmed());
     let _ = io::stdout().flush();
     let mut line = String::new();
     let _ = io::stdin().read_line(&mut line);
+    crate::PAUSING.store(false, Ordering::SeqCst);
 }
 
 pub fn format_mb(bytes: u64) -> String {
@@ -143,17 +140,22 @@ pub fn format_mb(bytes: u64) -> String {
 }
 
 pub fn format_size(bytes: u64) -> String {
-    const MB: f64 = 1024.0 * 1024.0;
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
     const TB: f64 = GB * 1024.0;
 
-    let bytes = bytes as f64;
-    if bytes >= TB {
-        format!("{:.1} TB", bytes / TB)
-    } else if bytes >= GB {
-        format!("{:.1} GB", bytes / GB)
+    let value = bytes as f64;
+    if value >= TB {
+        format!("{:.1} TB", value / TB)
+    } else if value >= GB {
+        format!("{:.1} GB", value / GB)
+    } else if value >= MB {
+        format!("{:.1} MB", value / MB)
+    } else if value >= KB {
+        format!("{:.1} KB", value / KB)
     } else {
-        format!("{:.1} MB", bytes / MB)
+        format!("{bytes} B")
     }
 }
 
@@ -222,5 +224,21 @@ impl Progress {
 impl Drop for Progress {
     fn drop(&mut self) {
         self.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_size;
+
+    #[test]
+    fn format_size_uses_a_readable_unit() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(512 * 1024), "512.0 KB");
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
+        assert_eq!(format_size(1024u64.pow(4)), "1.0 TB");
     }
 }

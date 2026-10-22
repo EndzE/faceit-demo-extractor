@@ -1,5 +1,4 @@
 use std::io;
-use std::path::PathBuf;
 
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
@@ -15,33 +14,36 @@ pub fn menu_label_for(target_filename: &str) -> String {
     format!("Extract to CS2 folder ({target_filename})")
 }
 
-pub fn quiet_exe_path(paths: &Paths) -> PathBuf {
-    paths.exe_dir.join("faceit-dem-quiet.exe")
-}
-
-pub fn ensure_quiet_exe(paths: &Paths) -> Result<(), String> {
-    let quiet = quiet_exe_path(paths);
-    if quiet.is_file() {
-        return Ok(());
+pub fn ensure_install_binaries(paths: &Paths) -> Result<(), String> {
+    for (exe, name) in [
+        (paths.quiet_exe(), "faceit-dem-quiet.exe"),
+        (paths.console_exe(), "faceit-dem.exe"),
+    ] {
+        if !exe.is_file() {
+            return Err(format!(
+                "{name} was not found next to this executable.\nExpected: {}\n\nBuild or copy both binaries first.",
+                exe.display()
+            ));
+        }
     }
 
-    Err(format!(
-        "faceit-dem-quiet.exe was not found next to this executable.\nExpected: {}\n\nBuild or copy the quiet binary first.",
-        quiet.display()
-    ))
+    Ok(())
 }
 
 pub fn build_context_menu_command(paths: &Paths) -> String {
-    format!(
-        "\"{}\" --context-menu \"%1\"",
-        quiet_exe_path(paths).display()
-    )
+    format!("\"{}\" --context-menu \"%1\"", paths.quiet_exe().display())
 }
 
 fn reg_default(subkey: &str) -> Option<String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu.open_subkey_with_flags(subkey, KEY_READ).ok()?;
     key.get_value::<String, _>("").ok()
+}
+
+fn reg_key_exists(subkey: &str) -> bool {
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(subkey, KEY_READ)
+        .is_ok()
 }
 
 pub fn context_menu_command() -> Option<String> {
@@ -53,13 +55,7 @@ pub fn context_menu_label() -> Option<String> {
 }
 
 pub fn context_menu_installed() -> bool {
-    RegKey::predef(HKEY_CURRENT_USER)
-        .open_subkey_with_flags(CTX_KEY, KEY_READ)
-        .is_ok()
-}
-
-pub fn install_context_menu(label: &str, command: &str) -> Result<(), String> {
-    install_context_menu_at(CTX_KEY, label, command)
+    reg_key_exists(CTX_KEY)
 }
 
 pub fn install_context_menu_at(root: &str, label: &str, command: &str) -> Result<(), String> {
@@ -78,9 +74,9 @@ pub fn install_context_menu_at(root: &str, label: &str, command: &str) -> Result
     Ok(())
 }
 
-pub fn set_context_menu_label(label: &str) -> Result<(), String> {
+pub fn set_context_menu_label_at(root: &str, label: &str) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(CTX_KEY).map_err(|err| err.to_string())?;
+    let (key, _) = hkcu.create_subkey(root).map_err(|err| err.to_string())?;
     key.set_value("", &label.to_string())
         .map_err(|err| err.to_string())
 }
@@ -98,24 +94,36 @@ pub fn remove_context_menu_at(root: &str) -> Result<(), String> {
     }
 }
 
-pub fn perform_install(paths: &Paths) -> Result<(), String> {
-    ensure_quiet_exe(paths)?;
+fn install_context_menu_with(paths: &Paths, root: &str) -> Result<(), String> {
+    ensure_install_binaries(paths)?;
     let target = config::load_config(&paths.config).target_filename;
-    install_context_menu(&menu_label_for(&target), &build_context_menu_command(paths))
+    install_context_menu_at(
+        root,
+        &menu_label_for(&target),
+        &build_context_menu_command(paths),
+    )
+}
+
+pub fn perform_install(paths: &Paths) -> Result<(), String> {
+    install_context_menu_with(paths, CTX_KEY)
 }
 
 pub fn perform_remove() -> Result<(), String> {
     remove_context_menu()
 }
 
-pub fn perform_update_label(paths: &Paths) -> Result<(), String> {
-    if context_menu_command().is_none() {
-        if context_menu_installed() {
-            return perform_install(paths);
+pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), String> {
+    if reg_default(&format!("{root}\\command")).is_none() {
+        if reg_key_exists(root) {
+            return install_context_menu_with(paths, root);
         }
         return Err("the right-click menu is not installed; nothing to update".to_string());
     }
 
     let target = config::load_config(&paths.config).target_filename;
-    set_context_menu_label(&menu_label_for(&target))
+    set_context_menu_label_at(root, &menu_label_for(&target))
+}
+
+pub fn perform_update_label(paths: &Paths) -> Result<(), String> {
+    perform_update_label_at(paths, CTX_KEY)
 }

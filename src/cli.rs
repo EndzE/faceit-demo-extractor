@@ -32,10 +32,11 @@ pub fn run_quiet() -> i32 {
                 config_error.unwrap_or_default()
             ),
         );
+        return 1;
     }
 
     if args.first().and_then(|arg| arg.to_str()) != Some("--context-menu") {
-        win32::message_box(
+        win32::message_box_info(
             crate::APP_NAME,
             "This program is launched from Explorer.\n\nUse faceit-dem.exe for the command-line interface.",
         );
@@ -54,7 +55,7 @@ pub fn run_quiet() -> i32 {
         Err(ContextMenuError::Failure(message)) => {
             win32::message_box(
                 crate::APP_NAME,
-                &format!("Could not queue the selection.\n\n{message}"),
+                &format!("Could not process the selection.\n\n{message}"),
             );
             1
         }
@@ -76,10 +77,11 @@ fn dispatch(args: &[OsString]) -> i32 {
     let paths = Paths::discover();
     let (ok, config_error) = config::ensure_config_file(&paths.config, true);
     if !ok {
-        output::warn(format!(
+        output::error(format!(
             "could not create or update config.json: {}",
             config_error.unwrap_or_default()
         ));
+        return 1;
     }
 
     if args.is_empty() {
@@ -210,10 +212,18 @@ pub fn usage() -> String {
     format!("{}\n", lines.join("\n"))
 }
 
+fn worker_field(paths: &Paths) -> String {
+    match queue::worker_state(paths) {
+        Ok((true, Some(pid))) => output::good(format!("running (pid {pid})")),
+        Ok((true, None)) => output::caution("running (pid unknown)"),
+        Ok((false, _)) => output::muted("not running"),
+        Err(message) => output::bad(message),
+    }
+}
+
 pub fn status_lines(paths: &Paths) -> Vec<String> {
     let config = config::load_config(&paths.config);
-    let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref());
-    let (worker_running, worker_pid) = queue::worker_state(paths);
+    let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
 
     let mut lines = vec![
         output::banner(),
@@ -236,14 +246,7 @@ pub fn status_lines(paths: &Paths) -> Vec<String> {
 
     lines.push(String::new());
     lines.push(output::section("Runtime"));
-    lines.push(output::field(
-        "Worker",
-        match (worker_running, worker_pid) {
-            (true, Some(pid)) => output::good(format!("running (pid {pid})")),
-            (true, None) => output::caution("running (pid unknown)"),
-            (false, _) => output::muted("not running"),
-        },
-    ));
+    lines.push(output::field("Worker", worker_field(paths)));
 
     lines.push(String::new());
     lines.push(output::section("Settings"));
@@ -461,10 +464,9 @@ fn run_menu(paths: &Paths) -> i32 {
         first = false;
 
         let config = config::load_config(&paths.config);
-        let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref());
+        let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
         let installed = registry::context_menu_installed();
         let command = registry::context_menu_command();
-        let (worker_running, worker_pid) = queue::worker_state(paths);
 
         println!("{}", output::banner());
         println!();
@@ -495,17 +497,7 @@ fn run_menu(paths: &Paths) -> i32 {
                 }
             )
         );
-        println!(
-            "{}",
-            output::field(
-                "Worker",
-                match (worker_running, worker_pid) {
-                    (true, Some(pid)) => output::good(format!("running (pid {pid})")),
-                    (true, None) => output::caution("running (pid unknown)"),
-                    (false, _) => output::muted("not running"),
-                }
-            )
-        );
+        println!("{}", output::field("Worker", worker_field(paths)));
         println!();
         println!("{}", output::rule(output::RULE_WIDTH));
         println!();

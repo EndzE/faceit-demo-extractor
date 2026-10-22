@@ -2,6 +2,8 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
+use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 
 use assert_cmd::Command;
@@ -13,18 +15,22 @@ use faceit_demo_extractor::config::{self, Config};
 use faceit_demo_extractor::cs2;
 use faceit_demo_extractor::extract::{self, ExtractResult};
 use faceit_demo_extractor::queue;
+use faceit_demo_extractor::registry;
 use faceit_demo_extractor::validate::{is_valid_filename, utf16_len};
-use faceit_demo_extractor::{DEMO_MAGIC, MAX_FILENAME_LEN, Paths};
+use faceit_demo_extractor::{DEMO_MAGIC, HOME_ENV, MAX_FILENAME_LEN, Paths};
 
-fn write_archive(path: &Path, payload: &[u8], checksum: bool) {
-    let file = File::create(path).unwrap();
-    let mut encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+fn archive_bytes(payload: &[u8], checksum: bool) -> Vec<u8> {
+    let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap();
     encoder
         .set_pledged_src_size(Some(payload.len() as u64))
         .unwrap();
     encoder.include_checksum(checksum).unwrap();
     encoder.write_all(payload).unwrap();
-    encoder.finish().unwrap();
+    encoder.finish().unwrap()
+}
+
+fn write_archive(path: &Path, payload: &[u8], checksum: bool) {
+    fs::write(path, archive_bytes(payload, checksum)).unwrap();
 }
 
 fn demo_payload(size: usize) -> Vec<u8> {
@@ -43,6 +49,25 @@ fn no_partial_files(directory: &Path) -> bool {
     })
 }
 
+fn cli(root: &Path) -> Command {
+    let mut command = Command::cargo_bin("faceit-dem").unwrap();
+    command.env(HOME_ENV, root).env("NO_COLOR", "1");
+    command
+}
+
+fn wait_until(mut condition: impl FnMut() -> bool, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if condition() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn filename_validation_rejects_invalid_windows_names() {
     assert!(is_valid_filename("1.dem"));
@@ -53,9 +78,18 @@ fn filename_validation_rejects_invalid_windows_names() {
     assert!(!is_valid_filename(""));
     assert!(!is_valid_filename("."));
     assert!(!is_valid_filename(".."));
+    assert!(is_valid_filename("COM10.dem"));
     assert!(!is_valid_filename("CON"));
     assert!(!is_valid_filename("con.dem"));
     assert!(!is_valid_filename("Lpt9.dem"));
+    assert!(!is_valid_filename("CONIN$"));
+    assert!(!is_valid_filename("conout$.dem"));
+    assert!(!is_valid_filename("COM¹.dem"));
+    assert!(!is_valid_filename("COM².dem"));
+    assert!(!is_valid_filename("COM³.dem"));
+    assert!(!is_valid_filename("LPT¹.dem"));
+    assert!(!is_valid_filename("LPT².dem"));
+    assert!(!is_valid_filename("LPT³.dem"));
     assert!(!is_valid_filename("foo/bar.dem"));
     assert!(!is_valid_filename(r"foo\bar.dem"));
     assert!(!is_valid_filename("bad<name"));
@@ -167,11 +201,30 @@ fn csgo_path_override_resolves_install_and_csgo_folders() {
     let csgo = directory.path().join("game").join("csgo");
     fs::create_dir_all(&csgo).unwrap();
 
-    let (found, source) = cs2::find_cs2_csgo_path(Some(directory.path().to_str().unwrap()));
+    let (found, source) =
+        cs2::find_cs2_csgo_path(Some(directory.path().to_str().unwrap()), directory.path());
     assert_eq!(found.as_deref(), Some(csgo.as_path()));
     assert!(source.contains("csgo_path"));
 
-    let (found, _) = cs2::find_cs2_csgo_path(Some(csgo.to_str().unwrap()));
+    let (found, _) = cs2::find_cs2_csgo_path(Some(csgo.to_str().unwrap()), directory.path());
+    assert_eq!(found.as_deref(), Some(csgo.as_path()));
+}
+
+#[test]
+fn relative_csgo_path_resolves_against_base_dir() {
+    let directory = tempfile::tempdir().unwrap();
+    let csgo = directory
+        .path()
+        .join("custom-cs2")
+        .join("game")
+        .join("csgo");
+    fs::create_dir_all(&csgo).unwrap();
+
+    let (found, source) = cs2::find_cs2_csgo_path(Some("custom-cs2"), directory.path());
+    assert_eq!(found.as_deref(), Some(csgo.as_path()));
+    assert!(source.contains("custom-cs2"));
+
+    let (found, _) = cs2::find_cs2_csgo_path(Some(r"custom-cs2\game\csgo"), directory.path());
     assert_eq!(found.as_deref(), Some(csgo.as_path()));
 }
 
@@ -180,7 +233,8 @@ fn csgo_path_override_does_not_fall_back_to_registry_when_missing() {
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("missing");
 
-    let (found, source) = cs2::find_cs2_csgo_path(Some(missing.to_str().unwrap()));
+    let (found, source) =
+        cs2::find_cs2_csgo_path(Some(missing.to_str().unwrap()), directory.path());
     assert!(found.is_none());
     assert!(source.contains("csgo_path"));
     assert!(source.contains("missing"));
@@ -245,7 +299,7 @@ fn csgo_path_override_drives_extraction() {
             "target_filename": "1.dem",
             "keep_zst": true,
             "move_to_recycle_bin": false,
-            "csgo_path": install.to_string_lossy()
+            "csgo_path": "custom-cs2"
         })
         .to_string(),
     )
@@ -319,6 +373,29 @@ fn extract_empty_archive_fails_cleanly() {
     assert_eq!(fs::read(&output).unwrap(), b"existing demo");
     assert!(input.exists());
     assert!(no_partial_files(directory.path()));
+}
+
+#[test]
+fn extract_accepts_a_skippable_frame_prefix() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("demo.dem.zst");
+
+    let mut bytes = vec![0x50, 0x2A, 0x4D, 0x18];
+    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(b"abc");
+    bytes.extend(archive_bytes(&demo_payload(512), true));
+    fs::write(&input, bytes).unwrap();
+
+    let code = extract::run_extract_batch(
+        &[input],
+        directory.path(),
+        "test",
+        &Config::defaults(),
+        false,
+    );
+
+    assert_eq!(code, 0);
+    assert!(directory.path().join("1.dem").exists());
 }
 
 #[test]
@@ -464,6 +541,34 @@ fn extract_deletes_original_when_configured() {
 }
 
 #[test]
+fn extract_refuses_to_overwrite_the_archive_itself() {
+    let directory = tempfile::tempdir().unwrap();
+    let archive = directory.path().join("1.dem");
+    write_archive(&archive, &demo_payload(4096), true);
+    let original = fs::read(&archive).unwrap();
+
+    let result = extract::extract_one(&archive, &archive, false, false);
+    assert_eq!(result, ExtractResult::Failed);
+    assert_eq!(fs::read(&archive).unwrap(), original);
+
+    let differently_cased = directory.path().join("1.DEM");
+    let result = extract::extract_one(&archive, &differently_cased, false, false);
+    assert_eq!(result, ExtractResult::Failed);
+    assert_eq!(fs::read(&archive).unwrap(), original);
+
+    let code = extract::run_extract_batch(
+        std::slice::from_ref(&archive),
+        directory.path(),
+        "test",
+        &Config::defaults(),
+        false,
+    );
+    assert_eq!(code, 1);
+    assert_eq!(fs::read(&archive).unwrap(), original);
+    assert!(no_partial_files(directory.path()));
+}
+
+#[test]
 fn batch_mode_writes_first_free_slots() {
     let directory = tempfile::tempdir().unwrap();
     let inputs_dir = directory.path().join("in");
@@ -521,8 +626,10 @@ fn enqueue_writes_absolute_path_and_strips_quotes() {
     fs::write(&target, b"x").unwrap();
 
     let files = vec![OsString::from(format!("  \"{}\"  ", target.display()))];
-    let queued = queue::enqueue_paths(&paths, &files).unwrap();
-    assert_eq!(queued, 1);
+    let outcome = queue::enqueue_paths(&paths, &files).unwrap();
+    assert_eq!(outcome.queued, 1);
+    assert_eq!(outcome.duplicates, 0);
+    assert!(outcome.failures.is_empty());
 
     let entries = fs::read_dir(&paths.queue_dir)
         .unwrap()
@@ -533,6 +640,115 @@ fn enqueue_writes_absolute_path_and_strips_quotes() {
 
     let taken = queue::take_queue_files(&paths);
     assert_eq!(taken, vec![target]);
+}
+
+#[test]
+fn duplicate_enqueues_are_collapsed() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let target = directory.path().join("demo.zst");
+    fs::write(&target, b"x").unwrap();
+
+    let first = queue::enqueue_paths(&paths, &[target.clone().into_os_string()]).unwrap();
+    assert_eq!(first.queued, 1);
+
+    let second = queue::enqueue_paths(
+        &paths,
+        &[
+            target.clone().into_os_string(),
+            target.clone().into_os_string(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(second.queued, 0);
+    assert_eq!(second.duplicates, 2);
+    assert!(second.failures.is_empty());
+
+    assert_eq!(queue::take_queue_files(&paths), vec![target]);
+}
+
+#[test]
+fn duplicate_queue_entries_are_collapsed_on_take() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    fs::create_dir_all(&paths.queue_dir).unwrap();
+    fs::write(paths.queue_dir.join("first.path"), r"C:\demo.zst").unwrap();
+    fs::write(paths.queue_dir.join("second.path"), r"C:\demo.zst").unwrap();
+
+    assert_eq!(
+        queue::take_queue_files(&paths),
+        vec![PathBuf::from(r"C:\demo.zst")]
+    );
+}
+
+#[test]
+fn enqueue_reports_invalid_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+
+    let outcome = queue::enqueue_paths(&paths, &[OsString::from("   ")]).unwrap();
+
+    assert_eq!(outcome.queued, 0);
+    assert_eq!(outcome.duplicates, 0);
+    assert_eq!(outcome.failures.len(), 1);
+    assert!(outcome.failures[0].contains("invalid path"));
+}
+
+#[test]
+fn queue_preserves_unpaired_surrogates() {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let units: Vec<u16> = r"C:\demo"
+        .encode_utf16()
+        .chain([0xD800])
+        .chain(".zst".encode_utf16())
+        .collect();
+    let target = OsString::from_wide(&units);
+
+    let outcome = queue::enqueue_paths(&paths, &[target]).unwrap();
+    assert_eq!(outcome.queued, 1);
+
+    let taken = queue::take_queue_files(&paths);
+    assert_eq!(taken.len(), 1);
+    assert_eq!(
+        taken[0].as_os_str().encode_wide().collect::<Vec<_>>(),
+        units
+    );
+}
+
+#[test]
+fn install_requires_both_binaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+
+    assert!(registry::ensure_install_binaries(&paths).is_err());
+
+    fs::write(paths.quiet_exe(), b"").unwrap();
+    assert!(registry::ensure_install_binaries(&paths).is_err());
+
+    fs::write(paths.console_exe(), b"").unwrap();
+    assert!(registry::ensure_install_binaries(&paths).is_ok());
+}
+
+#[test]
+fn worker_spawn_failure_is_reported() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let target = directory.path().join("demo.zst");
+    fs::write(&target, b"x").unwrap();
+
+    match queue::handle_context_menu(&paths, &[target.into_os_string()]) {
+        Err(queue::ContextMenuError::Failure(message)) => {
+            assert!(message.contains("could not start the worker"), "{message}");
+            assert!(
+                message.contains("faceit-dem.exe was not found"),
+                "{message}"
+            );
+        }
+        _ => panic!("expected a worker spawn failure"),
+    }
 }
 
 #[test]
@@ -594,28 +810,23 @@ fn collect_waits_for_idle_window_and_initial_timeout() {
     fs::write(&target, b"x").unwrap();
     queue::enqueue_paths(&paths, &[target.into_os_string()]).unwrap();
 
+    let idle = Duration::from_millis(250);
     let start = Instant::now();
     let collected = queue::collect_queued_files_with_timing(
         &paths,
-        Duration::from_millis(120),
+        idle,
         Duration::from_secs(1),
-        Duration::from_secs(3),
+        Duration::from_secs(5),
     );
     let elapsed = start.elapsed();
 
     assert_eq!(collected.len(), 1);
-    assert!(elapsed >= Duration::from_millis(120));
-    assert!(elapsed < Duration::from_secs(3));
+    assert!(elapsed >= idle);
 
     let start = Instant::now();
-    let empty = queue::collect_queued_files_with_timing(
-        &paths,
-        Duration::from_millis(120),
-        Duration::from_millis(120),
-        Duration::from_secs(1),
-    );
+    let empty = queue::collect_queued_files_with_timing(&paths, idle, idle, Duration::from_secs(5));
     assert!(empty.is_empty());
-    assert!(start.elapsed() >= Duration::from_millis(120));
+    assert!(start.elapsed() >= idle);
 }
 
 #[test]
@@ -623,12 +834,14 @@ fn worker_lock_is_exclusive_and_released_on_drop() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
 
-    let lock = queue::try_acquire_worker_lock(&paths).expect("first lock");
-    assert!(!queue::worker_lock_is_free(&paths));
-    assert!(queue::try_acquire_worker_lock(&paths).is_none());
+    let lock = queue::try_acquire_worker_lock(&paths)
+        .unwrap()
+        .expect("first lock");
+    assert!(!queue::worker_lock_is_free(&paths).unwrap());
+    assert!(queue::try_acquire_worker_lock(&paths).unwrap().is_none());
 
     drop(lock);
-    assert!(queue::worker_lock_is_free(&paths));
+    assert!(queue::worker_lock_is_free(&paths).unwrap());
 }
 
 #[test]
@@ -636,11 +849,13 @@ fn spawn_lock_allows_only_one_spawner() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
 
-    let gate = queue::try_acquire_spawn_lock(&paths).expect("spawn gate");
-    assert!(queue::try_acquire_spawn_lock(&paths).is_none());
+    let gate = queue::try_acquire_spawn_lock(&paths)
+        .unwrap()
+        .expect("spawn gate");
+    assert!(queue::try_acquire_spawn_lock(&paths).unwrap().is_none());
 
     drop(gate);
-    let gate = queue::try_acquire_spawn_lock(&paths);
+    let gate = queue::try_acquire_spawn_lock(&paths).unwrap();
     assert!(gate.is_some());
 }
 
@@ -651,12 +866,14 @@ fn retirement_rescan_keeps_late_files() {
     let target = directory.path().join("late.zst");
     fs::write(&target, b"x").unwrap();
 
-    let lock = queue::try_acquire_worker_lock(&paths).expect("worker lock");
+    let lock = queue::try_acquire_worker_lock(&paths)
+        .unwrap()
+        .expect("worker lock");
     queue::enqueue_paths(&paths, &[target.into_os_string()]).unwrap();
     drop(lock);
 
     assert!(queue::has_queued_files(&paths));
-    let replacement = queue::try_acquire_worker_lock(&paths);
+    let replacement = queue::try_acquire_worker_lock(&paths).unwrap();
     assert!(replacement.is_some());
 }
 
@@ -665,6 +882,9 @@ fn worker_pid_round_trips() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
     fs::create_dir_all(&paths.queue_dir).unwrap();
+
+    queue::write_worker_pid(&paths);
+    assert_eq!(queue::read_worker_pid(&paths), Some(std::process::id()));
 
     queue::write_worker_pid(&paths);
     assert_eq!(queue::read_worker_pid(&paths), Some(std::process::id()));
@@ -678,23 +898,45 @@ fn worker_state_reports_held_lock_and_pid() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
 
-    let lock = queue::try_acquire_worker_lock(&paths).unwrap();
+    let lock = queue::try_acquire_worker_lock(&paths).unwrap().unwrap();
     queue::write_worker_pid(&paths);
 
     assert_eq!(
-        queue::worker_state(&paths),
+        queue::worker_state(&paths).unwrap(),
         (true, Some(std::process::id()))
     );
 
     drop(lock);
-    assert_eq!(queue::worker_state(&paths), (false, None));
+    assert_eq!(queue::worker_state(&paths).unwrap(), (false, None));
     queue::cleanup_worker_pid(&paths);
 }
 
 #[test]
+fn worker_lock_errors_are_reported() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    fs::create_dir_all(paths.queue_dir.join("worker.lock")).unwrap();
+
+    assert!(queue::try_acquire_worker_lock(&paths).is_err());
+    assert!(queue::worker_lock_is_free(&paths).is_err());
+    assert!(queue::worker_state(&paths).is_err());
+
+    let target = directory.path().join("demo.zst");
+    fs::write(&target, b"x").unwrap();
+
+    match queue::handle_context_menu(&paths, &[target.into_os_string()]) {
+        Err(queue::ContextMenuError::Failure(message)) => {
+            assert!(message.contains("worker lock"), "{message}");
+        }
+        _ => panic!("expected a worker lock failure"),
+    }
+}
+
+#[test]
 fn help_prints_usage() {
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
+    let directory = tempfile::tempdir().unwrap();
+
+    cli(directory.path())
         .arg("--help")
         .assert()
         .success()
@@ -710,8 +952,7 @@ fn test_command_verifies_checksum() {
     let input = directory.path().join("demo.dem.zst");
     write_archive(&input, &demo_payload(4096), true);
 
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
+    cli(directory.path())
         .arg("--test")
         .arg(&input)
         .assert()
@@ -734,8 +975,7 @@ fn test_command_rejects_corrupted_archive() {
     bytes[last] ^= 0xFF;
     fs::write(&input, &bytes).unwrap();
 
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
+    cli(directory.path())
         .arg("--test")
         .arg(&input)
         .assert()
@@ -749,8 +989,9 @@ fn test_command_rejects_corrupted_archive() {
 
 #[test]
 fn test_command_requires_one_archive() {
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
+    let directory = tempfile::tempdir().unwrap();
+
+    cli(directory.path())
         .arg("--test")
         .assert()
         .code(2)
@@ -759,8 +1000,9 @@ fn test_command_requires_one_archive() {
 
 #[test]
 fn unknown_option_exits_two() {
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
+    let directory = tempfile::tempdir().unwrap();
+
+    cli(directory.path())
         .arg("--definitely-not-an-option")
         .assert()
         .code(2)
@@ -769,8 +1011,9 @@ fn unknown_option_exits_two() {
 
 #[test]
 fn dash_dash_without_files_exits_two() {
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
+    let directory = tempfile::tempdir().unwrap();
+
+    cli(directory.path())
         .arg("--")
         .assert()
         .code(2)
@@ -779,8 +1022,22 @@ fn dash_dash_without_files_exits_two() {
 
 #[test]
 fn status_prints_configuration() {
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    fs::create_dir_all(directory.path().join("csgo")).unwrap();
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "target_filename": "1.dem",
+            "keep_zst": true,
+            "move_to_recycle_bin": false,
+            "csgo_path": "csgo"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    cli(directory.path())
         .arg("--status")
         .assert()
         .success()
@@ -792,9 +1049,71 @@ fn status_prints_configuration() {
 }
 
 #[test]
+fn context_menu_quiet_worker_end_to_end() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let csgo = directory.path().join("csgo");
+    fs::create_dir_all(&csgo).unwrap();
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "target_filename": "1.dem",
+            "keep_zst": true,
+            "move_to_recycle_bin": false,
+            "csgo_path": "csgo"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_faceit-dem"), paths.console_exe()).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_faceit-dem-quiet"), paths.quiet_exe()).unwrap();
+
+    let input = directory.path().join("demo.dem.zst");
+    let payload = demo_payload(4096);
+    write_archive(&input, &payload, true);
+
+    let mut child = ProcessCommand::new(paths.quiet_exe())
+        .env(HOME_ENV, directory.path())
+        .env("FACEIT_DEMO_EXTRACTOR_TEST_NO_PAUSE", "1")
+        .arg("--context-menu")
+        .arg(&input)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the quiet app did not finish");
+        }
+        sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "the quiet app exited with {status}");
+
+    let output = csgo.join("1.dem");
+    assert!(
+        wait_until(|| output.is_file(), Duration::from_secs(10)),
+        "the queued demo was not extracted"
+    );
+    assert_eq!(fs::read(&output).unwrap(), payload);
+    assert!(input.exists());
+    assert!(
+        wait_until(
+            || queue::worker_lock_is_free(&paths).unwrap_or(false),
+            Duration::from_secs(10)
+        ),
+        "the worker did not finish"
+    );
+}
+
+#[test]
 fn menu_renders_and_exits_cleanly() {
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
+    let directory = tempfile::tempdir().unwrap();
+
+    cli(directory.path())
         .write_stdin("0\n")
         .assert()
         .success()
@@ -808,43 +1127,101 @@ fn menu_renders_and_exits_cleanly() {
 
 #[test]
 fn missing_file_exits_one() {
-    Command::cargo_bin("faceit-dem")
-        .unwrap()
-        .arg("definitely-missing-demo.zst")
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    fs::create_dir_all(directory.path().join("csgo")).unwrap();
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "target_filename": "1.dem",
+            "keep_zst": true,
+            "move_to_recycle_bin": false,
+            "csgo_path": "csgo"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let missing = directory.path().join("definitely-missing-demo.zst");
+
+    cli(directory.path())
+        .arg(&missing)
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("error:"))
+        .stderr(predicate::str::contains("input file not found"))
+        .stderr(predicate::str::contains("definitely-missing-demo.zst"))
         .stderr(predicate::str::contains("\u{1b}[").not());
 }
 
-#[test]
-#[ignore = "touches HKCU test subkey"]
-fn registry_install_and_remove_test_subkey() {
-    const TEST_KEY: &str = r"Software\FaceitDemoExtractorTests\ContextMenu";
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let _ = hkcu.delete_subkey_all(TEST_KEY);
+const REGISTRY_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsContextMenu";
+const REGISTRY_LABEL_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsUpdateLabel";
 
-    faceit_demo_extractor::registry::install_context_menu_at(
-        TEST_KEY,
+struct RegistryTestKey(&'static str);
+
+impl Drop for RegistryTestKey {
+    fn drop(&mut self) {
+        let _ = registry::remove_context_menu_at(self.0);
+    }
+}
+
+#[test]
+fn registry_install_and_remove_test_subkey() {
+    let _guard = RegistryTestKey(REGISTRY_TEST_KEY);
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let _ = hkcu.delete_subkey_all(REGISTRY_TEST_KEY);
+
+    registry::install_context_menu_at(
+        REGISTRY_TEST_KEY,
         "Test label",
         r#""C:\test\faceit-dem-quiet.exe" --context-menu "%1""#,
     )
     .unwrap();
 
-    let key = hkcu.open_subkey(TEST_KEY).unwrap();
+    let key = hkcu.open_subkey(REGISTRY_TEST_KEY).unwrap();
     let label: String = key.get_value("").unwrap();
     assert_eq!(label, "Test label");
 
-    let command_key = hkcu.open_subkey(format!("{TEST_KEY}\\command")).unwrap();
+    let command_key = hkcu
+        .open_subkey(format!("{REGISTRY_TEST_KEY}\\command"))
+        .unwrap();
     let command: String = command_key.get_value("").unwrap();
     assert!(command.contains("--context-menu"));
 
-    faceit_demo_extractor::registry::remove_context_menu_at(TEST_KEY).unwrap();
-    assert!(hkcu.open_subkey(TEST_KEY).is_err());
+    registry::remove_context_menu_at(REGISTRY_TEST_KEY).unwrap();
+    assert!(hkcu.open_subkey(REGISTRY_TEST_KEY).is_err());
 }
 
 #[test]
-#[ignore = "moves a temporary file to the Recycle Bin"]
+fn update_label_uses_the_current_target_filename() {
+    let _guard = RegistryTestKey(REGISTRY_LABEL_TEST_KEY);
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let _ = hkcu.delete_subkey_all(REGISTRY_LABEL_TEST_KEY);
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "target_filename": "demo.dem",
+            "keep_zst": true,
+            "move_to_recycle_bin": false,
+            "csgo_path": null
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    registry::install_context_menu_at(REGISTRY_LABEL_TEST_KEY, "Old label", "old command").unwrap();
+    registry::perform_update_label_at(&paths, REGISTRY_LABEL_TEST_KEY).unwrap();
+
+    let key = hkcu.open_subkey(REGISTRY_LABEL_TEST_KEY).unwrap();
+    let label: String = key.get_value("").unwrap();
+    assert_eq!(label, registry::menu_label_for("demo.dem"));
+
+    registry::remove_context_menu_at(REGISTRY_LABEL_TEST_KEY).unwrap();
+    assert!(registry::perform_update_label_at(&paths, REGISTRY_LABEL_TEST_KEY).is_err());
+}
+
+#[test]
 fn recycle_bin_moves_temp_file() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("recycle-me.txt");

@@ -80,13 +80,22 @@ fn resolve_csgo_dir(path: &Path) -> PathBuf {
     nested
 }
 
-pub fn find_cs2_csgo_path(override_path: Option<&str>) -> (Option<PathBuf>, String) {
+pub fn find_cs2_csgo_path(
+    override_path: Option<&str>,
+    base_dir: &Path,
+) -> (Option<PathBuf>, String) {
     if let Some(value) = override_path
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         let expanded = expand_env(value.trim_matches('"'));
-        let candidate = resolve_csgo_dir(Path::new(expanded.trim()));
+        let trimmed = Path::new(expanded.trim());
+        let resolved = if trimmed.is_absolute() {
+            trimmed.to_path_buf()
+        } else {
+            base_dir.join(trimmed)
+        };
+        let candidate = resolve_csgo_dir(&resolved);
 
         if candidate.is_dir() {
             return (

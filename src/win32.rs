@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
@@ -8,7 +9,9 @@ use windows::Win32::System::Threading::{
     CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
 };
 use windows::Win32::UI::Shell::{FO_DELETE, SHFILEOPSTRUCTW, SHFileOperationW};
-use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+use windows::Win32::UI::WindowsAndMessaging::{
+    MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE, MessageBoxW,
+};
 use windows::core::{BOOL, PCWSTR, PWSTR};
 
 const FOF_FLAGS: u16 = 0x0004 | 0x0010 | 0x0040 | 0x0400;
@@ -81,15 +84,27 @@ pub fn expand_env(value: &str) -> String {
     String::from_utf16_lossy(&buffer[..end])
 }
 
-fn push_quoted(target: &mut Vec<u16>, value: &str) {
+fn push_quoted(target: &mut Vec<u16>, value: &OsStr) {
     target.push('"' as u16);
-    for ch in value.chars() {
-        if ch == '"' {
-            target.push('\\' as u16);
+
+    let mut backslashes = 0;
+    for unit in value.encode_wide() {
+        if unit == '\\' as u16 {
+            backslashes += 1;
+            continue;
         }
-        let mut encoded = [0u16; 2];
-        target.extend_from_slice(ch.encode_utf16(&mut encoded));
+
+        if unit == '"' as u16 {
+            target.extend(std::iter::repeat_n('\\' as u16, backslashes * 2 + 1));
+            target.push('"' as u16);
+        } else {
+            target.extend(std::iter::repeat_n('\\' as u16, backslashes));
+            target.push(unit);
+        }
+        backslashes = 0;
     }
+
+    target.extend(std::iter::repeat_n('\\' as u16, backslashes * 2));
     target.push('"' as u16);
 }
 
@@ -101,10 +116,10 @@ pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), String> {
         .collect();
 
     let mut command_line: Vec<u16> = Vec::new();
-    push_quoted(&mut command_line, &exe.to_string_lossy());
+    push_quoted(&mut command_line, exe.as_os_str());
     for arg in args {
         command_line.push(' ' as u16);
-        push_quoted(&mut command_line, arg);
+        push_quoted(&mut command_line, OsStr::new(arg));
     }
     command_line.push(0);
 
@@ -136,7 +151,7 @@ pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn message_box(title: &str, text: &str) {
+fn show_message_box(title: &str, text: &str, icon: MESSAGEBOX_STYLE) {
     let title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
     let text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -145,7 +160,50 @@ pub fn message_box(title: &str, text: &str) {
             None,
             PCWSTR(text.as_ptr()),
             PCWSTR(title.as_ptr()),
-            MB_OK | MB_ICONERROR,
+            MB_OK | icon,
         );
+    }
+}
+
+pub fn message_box(title: &str, text: &str) {
+    show_message_box(title, text, MB_ICONERROR);
+}
+
+pub fn message_box_info(title: &str, text: &str) {
+    show_message_box(title, text, MB_ICONINFORMATION);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quoted(value: &str) -> String {
+        let mut buffer = Vec::new();
+        push_quoted(&mut buffer, OsStr::new(value));
+        String::from_utf16(&buffer).unwrap()
+    }
+
+    #[test]
+    fn quoting_matches_windows_rules() {
+        assert_eq!(quoted("plain"), "\"plain\"");
+        assert_eq!(quoted(r"C:\folder\"), "\"C:\\folder\\\\\"");
+        assert_eq!(quoted("a\"b"), "\"a\\\"b\"");
+        assert_eq!(
+            quoted("a\\\\\"b"),
+            format!("\"a{}{}b\"", "\\".repeat(5), '"')
+        );
+    }
+
+    #[test]
+    fn quoting_preserves_non_unicode_paths() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        let value = OsString::from_wide(&[0xD800]);
+        let path = Path::new(&value);
+        let mut buffer = Vec::new();
+        push_quoted(&mut buffer, path.as_os_str());
+
+        assert_eq!(buffer, vec!['"' as u16, 0xD800, '"' as u16]);
     }
 }

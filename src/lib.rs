@@ -21,10 +21,12 @@ pub const DEFAULT_MOVE_TO_RECYCLE_BIN: bool = false;
 
 pub const DEMO_MAGIC: &[u8] = b"PBDEMS2\x00";
 pub const MAX_FILENAME_LEN: usize = 255;
+pub const HOME_ENV: &str = "FACEIT_DEMO_EXTRACTOR_HOME";
 
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
 pub static EXTRACTING: AtomicBool = AtomicBool::new(false);
 pub static WORKER_MODE: AtomicBool = AtomicBool::new(false);
+pub static PAUSING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -36,6 +38,10 @@ pub struct Paths {
 
 impl Paths {
     pub fn discover() -> Self {
+        if let Some(root) = std::env::var_os(HOME_ENV) {
+            return Self::from_root(Path::new(&root));
+        }
+
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("faceit-dem.exe"));
         let exe_dir = exe
             .parent()
@@ -51,7 +57,7 @@ impl Paths {
         }
     }
 
-    pub fn for_tests(root: &Path) -> Self {
+    fn from_root(root: &Path) -> Self {
         let exe_dir = root.to_path_buf();
         Self {
             exe: exe_dir.join("faceit-dem.exe"),
@@ -59,6 +65,18 @@ impl Paths {
             queue_dir: exe_dir.join("queue"),
             exe_dir,
         }
+    }
+
+    pub fn for_tests(root: &Path) -> Self {
+        Self::from_root(root)
+    }
+
+    pub fn console_exe(&self) -> PathBuf {
+        self.exe_dir.join("faceit-dem.exe")
+    }
+
+    pub fn quiet_exe(&self) -> PathBuf {
+        self.exe_dir.join("faceit-dem-quiet.exe")
     }
 
     pub fn worker_lock(&self) -> PathBuf {
@@ -112,7 +130,9 @@ pub fn run_quiet() -> i32 {
 fn install_ctrlc_handler() {
     let installed = ctrlc::set_handler(|| {
         CANCEL.store(true, Ordering::SeqCst);
-        if EXTRACTING.load(Ordering::SeqCst) || WORKER_MODE.load(Ordering::SeqCst) {
+        if !PAUSING.load(Ordering::SeqCst)
+            && (EXTRACTING.load(Ordering::SeqCst) || WORKER_MODE.load(Ordering::SeqCst))
+        {
             return;
         }
         output::cancelled();

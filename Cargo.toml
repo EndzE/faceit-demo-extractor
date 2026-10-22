@@ -3,6 +3,7 @@ name = "faceit-demo-extractor"
 version = "2.0.0"
 edition = "2024"
 rust-version = "1.89"
+license = "MIT"
 
 [lib]
 name = "faceit_demo_extractor"
@@ -23,7 +24,6 @@ lto = true
 codegen-units = 1
 
 [dependencies]
-anyhow = "1.0.104"
 colored = "3.1.1"
 ctrlc = "3.5.2"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }

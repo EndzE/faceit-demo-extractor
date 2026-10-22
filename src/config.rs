@@ -153,7 +153,7 @@ pub fn save_config(path: &Path, updates: &[(&str, Value)]) -> Result<(), String>
     temp.write_all(text.as_bytes())
         .map_err(|err| err.to_string())?;
     temp.flush().map_err(|err| err.to_string())?;
-    let _ = temp.as_file().sync_all();
+    temp.as_file().sync_all().map_err(|err| err.to_string())?;
     temp.persist(path).map_err(|err| err.error.to_string())?;
 
     Ok(())

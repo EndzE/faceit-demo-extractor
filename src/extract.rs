@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::config::{self, Config};
 use crate::cs2;
@@ -13,10 +13,10 @@ use crate::{CANCEL, DEMO_MAGIC, EXTRACTING, MAX_FILENAME_LEN, Paths};
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const CONTENT_CHECKSUM_FLAG: u8 = 0x04;
-const HEADER_PROBE: usize = 32;
 const COPY_BUFFER: usize = 1024 * 1024;
-
-pub const CS2_REG_LOOKUP: &[(&str, &str)] = cs2::CS2_REG_LOOKUP;
+const PARTIAL_PREFIX: &str = ".faceit-";
+const PARTIAL_SUFFIX: &str = ".partial";
+const ORPHANED_PARTIAL_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractResult {
@@ -36,6 +36,22 @@ enum CopyError {
 struct ZstdHeader {
     has_checksum: bool,
     content_size: Option<u64>,
+}
+
+enum HeaderError {
+    Open(io::Error),
+    Read(io::Error),
+    Format(&'static str),
+}
+
+impl From<io::Error> for HeaderError {
+    fn from(err: io::Error) -> Self {
+        if err.kind() == io::ErrorKind::UnexpectedEof {
+            HeaderError::Format("unexpected end of file")
+        } else {
+            HeaderError::Read(err)
+        }
+    }
 }
 
 struct ExtractingGuard;
@@ -126,41 +142,161 @@ fn report_disk_space_failure(output_dir: &Path, required: u64, available: u64) {
     );
 }
 
-fn check_zstd_header(input: &Path) -> Option<ZstdHeader> {
-    let mut file = match File::open(input) {
-        Ok(file) => file,
-        Err(err) => {
-            error(format!("could not open the archive: {err}"));
-            return None;
-        }
-    };
+fn read_u8(reader: &mut impl Read) -> io::Result<u8> {
+    let mut buffer = [0u8; 1];
+    reader.read_exact(&mut buffer)?;
+    Ok(buffer[0])
+}
 
-    let mut header = [0u8; HEADER_PROBE];
-    let read = match file.read(&mut header) {
-        Ok(read) if read >= 5 => read,
-        Ok(_) => {
-            report_zstd_failure("unexpected end of file");
-            return None;
-        }
-        Err(err) => {
-            error(format!("could not read the archive header: {err}"));
-            return None;
-        }
-    };
+fn read_u16_le(reader: &mut impl Read) -> io::Result<u16> {
+    let mut buffer = [0u8; 2];
+    reader.read_exact(&mut buffer)?;
+    Ok(u16::from_le_bytes(buffer))
+}
 
-    if header[..4] != ZSTD_MAGIC {
-        report_zstd_failure("unknown frame descriptor");
-        return None;
+fn read_u24_le(reader: &mut impl Read) -> io::Result<u32> {
+    let mut buffer = [0u8; 3];
+    reader.read_exact(&mut buffer)?;
+    Ok(u32::from_le_bytes([buffer[0], buffer[1], buffer[2], 0]))
+}
+
+fn read_u32_le(reader: &mut impl Read) -> io::Result<u32> {
+    let mut buffer = [0u8; 4];
+    reader.read_exact(&mut buffer)?;
+    Ok(u32::from_le_bytes(buffer))
+}
+
+fn read_u64_le(reader: &mut impl Read) -> io::Result<u64> {
+    let mut buffer = [0u8; 8];
+    reader.read_exact(&mut buffer)?;
+    Ok(u64::from_le_bytes(buffer))
+}
+
+fn skip_exact(reader: &mut impl Read, mut remaining: u64) -> io::Result<()> {
+    let mut buffer = [0u8; 8192];
+    while remaining > 0 {
+        let take = remaining.min(buffer.len() as u64) as usize;
+        let read = reader.read(&mut buffer[..take])?;
+        if read == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        remaining -= read as u64;
+    }
+    Ok(())
+}
+
+fn inspect_zstd_header(input: &Path) -> Result<ZstdHeader, HeaderError> {
+    let file = File::open(input).map_err(HeaderError::Open)?;
+    let mut reader = BufReader::with_capacity(COPY_BUFFER, file);
+    let mut seen_frame = false;
+    let mut has_checksum = true;
+    let mut content_size = Some(0u64);
+
+    loop {
+        let mut magic = [0u8; 4];
+        let first = match reader.read(&mut magic[..1]) {
+            Ok(first) => first,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err.into()),
+        };
+        if first == 0 {
+            break;
+        }
+        reader.read_exact(&mut magic[1..])?;
+
+        if magic == ZSTD_MAGIC {
+            seen_frame = true;
+            let descriptor = read_u8(&mut reader)?;
+            if descriptor & 0x08 != 0 {
+                return Err(HeaderError::Format("invalid frame header"));
+            }
+
+            let single_segment = descriptor & 0x20 != 0;
+            if !single_segment {
+                let _window_descriptor = read_u8(&mut reader)?;
+            }
+
+            let dictionary_size = match descriptor & 0x03 {
+                0 => 0,
+                1 => 1,
+                2 => 2,
+                _ => 4,
+            };
+            skip_exact(&mut reader, dictionary_size)?;
+
+            let content_size_field = match (descriptor >> 6, single_segment) {
+                (0, false) => 0,
+                (0, true) => 1,
+                (1, _) => 2,
+                (2, _) => 4,
+                _ => 8,
+            };
+            let frame_size = match content_size_field {
+                0 => None,
+                1 => Some(u64::from(read_u8(&mut reader)?)),
+                2 => Some(u64::from(read_u16_le(&mut reader)?) + 256),
+                4 => Some(u64::from(read_u32_le(&mut reader)?)),
+                8 => Some(read_u64_le(&mut reader)?),
+                _ => unreachable!(),
+            };
+            content_size = match (content_size, frame_size) {
+                (Some(total), Some(size)) => total.checked_add(size),
+                _ => None,
+            };
+            has_checksum &= descriptor & CONTENT_CHECKSUM_FLAG != 0;
+
+            loop {
+                let block = read_u24_le(&mut reader)?;
+                let last = block & 1 != 0;
+                let block_type = (block >> 1) & 0x03;
+                let block_size = u64::from(block >> 3);
+                match block_type {
+                    0 | 2 => skip_exact(&mut reader, block_size)?,
+                    1 => skip_exact(&mut reader, 1)?,
+                    _ => return Err(HeaderError::Format("invalid block header")),
+                }
+                if last {
+                    break;
+                }
+            }
+
+            if descriptor & CONTENT_CHECKSUM_FLAG != 0 {
+                skip_exact(&mut reader, 4)?;
+            }
+        } else if matches!(magic, [0x50..=0x5F, 0x2A, 0x4D, 0x18]) {
+            let size = u64::from(read_u32_le(&mut reader)?);
+            skip_exact(&mut reader, size)?;
+        } else {
+            return Err(HeaderError::Format("unknown frame descriptor"));
+        }
     }
 
-    let content_size = zstd::zstd_safe::get_frame_content_size(&header[..read])
-        .ok()
-        .flatten();
+    if !seen_frame {
+        return Err(HeaderError::Format("unexpected end of file"));
+    }
 
-    Some(ZstdHeader {
-        has_checksum: header[4] & CONTENT_CHECKSUM_FLAG != 0,
+    Ok(ZstdHeader {
+        has_checksum,
         content_size,
     })
+}
+
+fn check_zstd_header(input: &Path) -> Option<ZstdHeader> {
+    match inspect_zstd_header(input) {
+        Ok(header) => Some(header),
+        Err(HeaderError::Open(err)) => {
+            error(format!("could not open the archive: {err}"));
+            None
+        }
+        Err(HeaderError::Read(err)) => {
+            error(format!("could not read the archive header: {err}"));
+            None
+        }
+        Err(HeaderError::Format(message)) => {
+            report_zstd_failure(message);
+            None
+        }
+    }
 }
 
 fn copy_payload(
@@ -228,6 +364,39 @@ fn decode_archive(
     Ok(total)
 }
 
+fn cleanup_orphaned_partials(directory: &Path) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    let now = SystemTime::now();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(PARTIAL_PREFIX) || !name.ends_with(PARTIAL_SUFFIX) {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+            continue;
+        };
+        let orphaned = now
+            .duration_since(modified)
+            .is_ok_and(|age| age > ORPHANED_PARTIAL_AGE);
+        if orphaned {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    if let (Ok(left), Ok(right)) = (fs::canonicalize(left), fs::canonicalize(right)) {
+        return left == right;
+    }
+
+    let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    absolute(left) == absolute(right)
+}
+
 pub fn extract_one(
     input: &Path,
     output: &Path,
@@ -236,6 +405,18 @@ pub fn extract_one(
 ) -> ExtractResult {
     if !input.is_file() {
         error(format!("input file not found: {}", input.display()));
+        return ExtractResult::Failed;
+    }
+
+    if paths_refer_to_same_file(input, output) {
+        error(format!(
+            "the archive and the demo target are the same file: {}",
+            input.display()
+        ));
+        println!(
+            "  {}",
+            output::muted("Change \"target_filename\" in config.json; nothing was modified.")
+        );
         return ExtractResult::Failed;
     }
 
@@ -252,6 +433,8 @@ pub fn extract_one(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
 
+    cleanup_orphaned_partials(output_dir);
+
     if let Some(required) = content_size {
         match win32::available_space(output_dir) {
             Ok(available) if available < required => {
@@ -267,8 +450,8 @@ pub fn extract_one(
     }
 
     let mut temp = match tempfile::Builder::new()
-        .prefix(".faceit-")
-        .suffix(".partial")
+        .prefix(PARTIAL_PREFIX)
+        .suffix(PARTIAL_SUFFIX)
         .tempfile_in(output_dir)
     {
         Ok(temp) => temp,
@@ -303,7 +486,10 @@ pub fn extract_one(
         return ExtractResult::Failed;
     }
 
-    let _ = temp.as_file().sync_all();
+    if let Err(err) = temp.as_file().sync_all() {
+        error(format!("could not flush the demo to disk: {err}"));
+        return ExtractResult::Failed;
+    }
 
     let written = match temp.as_file().metadata() {
         Ok(metadata) => metadata.len(),
@@ -333,14 +519,12 @@ pub fn extract_one(
         return ExtractResult::Failed;
     }
 
-    if CANCEL.load(Ordering::SeqCst) {
-        return ExtractResult::Cancelled;
-    }
-
     println!("  {}  Extraction complete.", output::good("OK"));
 
     if !has_checksum {
-        warn("archive has no checksum; only truncation and the demo header were verified");
+        warn(
+            "one or more archive frames have no checksum; only truncation and the demo header were verified",
+        );
     }
 
     if keep_zst {
@@ -401,7 +585,9 @@ pub fn test_archive(input: &Path) -> ExtractResult {
             }
 
             if !header.has_checksum {
-                warn("archive has no XXH64 checksum; integrity could not be verified");
+                warn(
+                    "one or more archive frames have no XXH64 checksum; integrity could not be fully verified",
+                );
                 println!(
                     "{}",
                     output::field("Result", output::caution("not verified"))
@@ -465,13 +651,19 @@ pub fn split_ext(name: &str) -> (String, String) {
     (base[..dot].to_string(), base[dot..].to_string())
 }
 
-pub fn next_free_name(folder: &Path, mut stem: String, ext: &str) -> String {
-    while !stem.is_empty() && utf16_len(&stem) + utf16_len(ext) + 6 > MAX_FILENAME_LEN {
+fn name_with_suffix(stem: &str, suffix: &str, ext: &str) -> String {
+    let mut stem = stem.to_string();
+    while !stem.is_empty()
+        && utf16_len(&stem) + utf16_len(suffix) + utf16_len(ext) > MAX_FILENAME_LEN
+    {
         stem.pop();
     }
+    format!("{stem}{suffix}{ext}")
+}
 
-    for number in 1..10000 {
-        let candidate = format!("{stem}_{number}{ext}");
+fn next_free_name_with_attempts(folder: &Path, stem: &str, ext: &str, attempts: u32) -> String {
+    for number in 1..attempts {
+        let candidate = name_with_suffix(stem, &format!("_{number}"), ext);
         if !folder.join(&candidate).exists() {
             return candidate;
         }
@@ -481,7 +673,11 @@ pub fn next_free_name(folder: &Path, mut stem: String, ext: &str) -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
-    format!("{stem}_{stamp}{ext}")
+    name_with_suffix(stem, &format!("_{stamp}"), ext)
+}
+
+pub fn next_free_name(folder: &Path, stem: String, ext: &str) -> String {
+    next_free_name_with_attempts(folder, &stem, ext, 10_000)
 }
 
 pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> i32 {
@@ -490,7 +686,7 @@ pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> 
     }
 
     let config = config::load_config(&paths.config);
-    let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref());
+    let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
     let Some(csgo) = csgo else {
         error("could not locate the CS2 game\\csgo folder.");
         println!("  {}", output::muted(&source));
@@ -506,7 +702,7 @@ pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> 
             );
         } else {
             println!("{}", output::section("Locations checked"));
-            for (subkey, value_name) in CS2_REG_LOOKUP {
+            for (subkey, value_name) in cs2::CS2_REG_LOOKUP {
                 println!("  {} -> {value_name}", output::muted(subkey));
             }
             println!(
@@ -657,6 +853,16 @@ pub fn run_extract_batch(
 mod tests {
     use super::*;
 
+    fn zstd_frame(payload: &[u8], checksum: bool) -> Vec<u8> {
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap();
+        encoder
+            .set_pledged_src_size(Some(payload.len() as u64))
+            .unwrap();
+        encoder.include_checksum(checksum).unwrap();
+        encoder.write_all(payload).unwrap();
+        encoder.finish().unwrap()
+    }
+
     #[test]
     fn frame_header_exposes_content_size_and_checksum() {
         let directory = tempfile::tempdir().unwrap();
@@ -675,5 +881,128 @@ mod tests {
 
         assert!(header.has_checksum);
         assert_eq!(header.content_size, Some(payload.len() as u64));
+    }
+
+    #[test]
+    fn frame_header_reads_a_two_byte_content_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("demo.dem.zst");
+        let payload = vec![0xAB; 4096];
+        fs::write(&input, zstd_frame(&payload, true)).unwrap();
+
+        let header = check_zstd_header(&input).expect("zstd header");
+
+        assert_eq!(header.content_size, Some(payload.len() as u64));
+    }
+
+    #[test]
+    fn frame_header_sums_concatenated_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("demo.dem.zst");
+        let first = b"PBDEMS2\x00first";
+        let second = b"second";
+
+        let mut bytes = zstd_frame(first, true);
+        bytes.extend(zstd_frame(second, true));
+        fs::write(&input, bytes).unwrap();
+
+        let header = check_zstd_header(&input).expect("zstd header");
+
+        assert!(header.has_checksum);
+        assert_eq!(
+            header.content_size,
+            Some((first.len() + second.len()) as u64)
+        );
+    }
+
+    #[test]
+    fn frame_header_requires_a_checksum_in_every_frame() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("demo.dem.zst");
+        let first = b"PBDEMS2\x00first";
+        let second = b"second";
+
+        let mut bytes = zstd_frame(first, true);
+        bytes.extend(zstd_frame(second, false));
+        fs::write(&input, bytes).unwrap();
+
+        let header = check_zstd_header(&input).expect("zstd header");
+
+        assert!(!header.has_checksum);
+        assert_eq!(
+            header.content_size,
+            Some((first.len() + second.len()) as u64)
+        );
+    }
+
+    #[test]
+    fn frame_header_accepts_a_skippable_frame_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("demo.dem.zst");
+        let payload = b"PBDEMS2\x00demo";
+
+        let mut bytes = vec![0x50, 0x2A, 0x4D, 0x18];
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(b"abc");
+        bytes.extend(zstd_frame(payload, true));
+        fs::write(&input, bytes).unwrap();
+
+        let header = check_zstd_header(&input).expect("zstd header");
+
+        assert!(header.has_checksum);
+        assert_eq!(header.content_size, Some(payload.len() as u64));
+    }
+
+    #[test]
+    fn name_with_suffix_fits_the_filename_limit() {
+        let stem = "a".repeat(MAX_FILENAME_LEN);
+        let suffix = "_1234567890";
+
+        let name = name_with_suffix(&stem, suffix, ".dem");
+
+        assert!(utf16_len(&name) <= MAX_FILENAME_LEN);
+        assert!(name.ends_with("_1234567890.dem"));
+    }
+
+    #[test]
+    fn next_free_name_falls_back_to_a_timestamp() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("1_1.dem"), b"x").unwrap();
+        fs::write(directory.path().join("1_2.dem"), b"x").unwrap();
+
+        let name = next_free_name_with_attempts(directory.path(), "1", ".dem", 3);
+
+        let suffix = name
+            .strip_prefix("1_")
+            .and_then(|rest| rest.strip_suffix(".dem"))
+            .expect("timestamp suffix");
+        assert!(suffix.chars().all(|ch| ch.is_ascii_digit()));
+        assert!(utf16_len(&name) <= MAX_FILENAME_LEN);
+        assert!(!directory.path().join(&name).exists());
+    }
+
+    #[test]
+    fn orphaned_partials_are_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let stale = directory.path().join(".faceit-old.partial");
+        let fresh = directory.path().join(".faceit-new.partial");
+        let unrelated = directory.path().join("keep.partial");
+        fs::write(&stale, b"x").unwrap();
+        fs::write(&fresh, b"x").unwrap();
+        fs::write(&unrelated, b"x").unwrap();
+
+        let modified = SystemTime::now() - ORPHANED_PARTIAL_AGE - Duration::from_secs(1);
+        File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+
+        cleanup_orphaned_partials(directory.path());
+
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+        assert!(unrelated.exists());
     }
 }
