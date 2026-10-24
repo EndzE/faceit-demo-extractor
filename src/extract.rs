@@ -501,7 +501,7 @@ fn decode_archive(
 
     let result = match format {
         ArchiveFormat::Zstd => {
-            let mut decoder = zstd::stream::read::Decoder::new(reader)
+            let mut decoder = zstd::stream::read::Decoder::with_buffer(reader)
                 .map_err(|err| CopyError::Codec(format, err.to_string()))?;
             copy_payload(
                 &mut decoder,
