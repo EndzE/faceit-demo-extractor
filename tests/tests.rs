@@ -335,13 +335,17 @@ fn ensure_config_resets_invalid_json_and_non_object() {
     assert_eq!(
         saved,
         serde_json::json!({
+            "rename_demo": true,
             "target_filename": "1.dem",
             "keep_zst": false,
             "move_to_recycle_bin": false,
             "overwrite_single_file_extraction": true,
-            "rename_demo": true,
             "csgo_path": null
         })
+    );
+    assert_eq!(
+        saved.as_object().unwrap().keys().next().unwrap(),
+        "rename_demo"
     );
     assert_eq!(fs::read_to_string(&backup).unwrap(), "not json");
 

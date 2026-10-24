@@ -17,28 +17,29 @@ static CONFIG_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
+    pub rename_demo: bool,
     pub target_filename: String,
     pub keep_zst: bool,
     pub move_to_recycle_bin: bool,
     pub overwrite_single_file_extraction: bool,
-    pub rename_demo: bool,
     pub csgo_path: Option<String>,
 }
 
 impl Config {
     pub fn defaults() -> Self {
         Self {
+            rename_demo: DEFAULT_RENAME_DEMO,
             target_filename: DEFAULT_TARGET_FILENAME.to_string(),
             keep_zst: DEFAULT_KEEP_ZST,
             move_to_recycle_bin: DEFAULT_MOVE_TO_RECYCLE_BIN,
             overwrite_single_file_extraction: DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
-            rename_demo: DEFAULT_RENAME_DEMO,
             csgo_path: None,
         }
     }
 
     pub fn updates(&self) -> Vec<(&'static str, Value)> {
         vec![
+            ("rename_demo", Value::Bool(self.rename_demo)),
             (
                 "target_filename",
                 Value::String(self.target_filename.clone()),
@@ -49,7 +50,6 @@ impl Config {
                 "overwrite_single_file_extraction",
                 Value::Bool(self.overwrite_single_file_extraction),
             ),
-            ("rename_demo", Value::Bool(self.rename_demo)),
             (
                 "csgo_path",
                 self.csgo_path
