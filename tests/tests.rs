@@ -1320,6 +1320,8 @@ fn missing_file_exits_one() {
 
 const REGISTRY_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsContextMenu";
 const REGISTRY_LABEL_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsUpdateLabel";
+const REGISTRY_STATE_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsState";
+const REGISTRY_STATE_COMMAND_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsState\command";
 
 struct RegistryTestKey(&'static str);
 
@@ -1385,6 +1387,43 @@ fn update_label_uses_the_current_target_filename() {
 
     registry::remove_context_menu_at(REGISTRY_LABEL_TEST_KEY).unwrap();
     assert!(registry::perform_update_label_at(&paths, REGISTRY_LABEL_TEST_KEY).is_err());
+}
+
+#[test]
+fn context_menu_state_detects_moved_executable_and_missing_label() {
+    let _guard = RegistryTestKey(REGISTRY_STATE_TEST_KEY);
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let _ = hkcu.delete_subkey_all(REGISTRY_STATE_TEST_KEY);
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let test_menus = &[registry::ContextMenu {
+        extension: ".test",
+        key: REGISTRY_STATE_TEST_KEY,
+        command_key: REGISTRY_STATE_COMMAND_TEST_KEY,
+    }];
+
+    assert_eq!(registry::context_menu_state_for(test_menus, &paths), None);
+
+    let expected = registry::build_context_menu_command(&paths);
+    registry::install_context_menu_at(REGISTRY_STATE_TEST_KEY, "Test Label", &expected).unwrap();
+    assert_eq!(
+        registry::context_menu_state_for(test_menus, &paths),
+        Some(true)
+    );
+
+    let moved_paths = Paths::for_tests(&directory.path().join("moved"));
+    assert_eq!(
+        registry::context_menu_state_for(test_menus, &moved_paths),
+        Some(false)
+    );
+
+    let (key, _) = hkcu.create_subkey(REGISTRY_STATE_TEST_KEY).unwrap();
+    let _ = key.delete_value("");
+    assert_eq!(
+        registry::context_menu_state_for(test_menus, &paths),
+        Some(false)
+    );
 }
 
 #[test]

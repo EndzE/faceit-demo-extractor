@@ -93,18 +93,25 @@ pub fn context_menu_installed() -> bool {
     CTX_MENUS.iter().any(ContextMenu::installed)
 }
 
-/// Overall right-click state: `None` when no menu is installed, `Some(true)`
-/// when every menu is installed with a command, `Some(false)` when at least
-/// one installed menu needs repair.
-pub fn context_menu_state() -> Option<bool> {
-    if !context_menu_installed() {
+pub fn context_menu_state_for(menus: &[ContextMenu], paths: &Paths) -> Option<bool> {
+    if !menus.iter().any(ContextMenu::installed) {
         return None;
     }
+    let expected_command = build_context_menu_command(paths);
     Some(
-        CTX_MENUS
-            .iter()
-            .all(|menu| menu.installed() && menu.command().is_some()),
+        menus.iter().all(|menu| {
+            menu.installed()
+                && menu.label().is_some()
+                && menu.command().as_deref() == Some(&expected_command)
+        }),
     )
+}
+
+/// Overall right-click state: `None` when no menu is installed, `Some(true)`
+/// when every menu is installed with a command and label matching the current paths,
+/// `Some(false)` when at least one installed menu needs repair.
+pub fn context_menu_state(paths: &Paths) -> Option<bool> {
+    context_menu_state_for(CTX_MENUS, paths)
 }
 
 pub fn install_context_menu_at(root: &str, label: &str, command: &str) -> Result<(), String> {

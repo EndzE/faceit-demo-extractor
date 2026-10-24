@@ -263,9 +263,11 @@ pub fn status_lines(paths: &Paths) -> Vec<String> {
     lines.push(String::new());
     lines.push(output::section("Right-click menu"));
 
+    let expected_command = registry::build_context_menu_command(paths);
+
     lines.push(output::field(
         "Status",
-        match registry::context_menu_state() {
+        match registry::context_menu_state(paths) {
             Some(true) => output::good("installed"),
             Some(false) => output::caution("needs repair"),
             None => output::muted("not installed"),
@@ -279,11 +281,23 @@ pub fn status_lines(paths: &Paths) -> Vec<String> {
         if let Some(command) = menu.command() {
             if let Some(label) = menu.label() {
                 lines.push(output::field(&format!("Menu {}", menu.extension), label));
+            } else {
+                lines.push(output::field(
+                    &format!("Menu {}", menu.extension),
+                    output::caution("needs repair"),
+                ));
             }
-            lines.push(output::field(
-                &format!("Command {}", menu.extension),
-                command,
-            ));
+            if command == expected_command {
+                lines.push(output::field(
+                    &format!("Command {}", menu.extension),
+                    command,
+                ));
+            } else {
+                lines.push(output::field(
+                    &format!("Command {}", menu.extension),
+                    output::caution(format!("{command} (wrong path)")),
+                ));
+            }
         } else {
             lines.push(output::field(
                 &format!("Menu {}", menu.extension),
@@ -468,7 +482,7 @@ fn run_menu(paths: &Paths) -> i32 {
 
         let config = config::load_config(&paths.config);
         let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
-        let menu_state = registry::context_menu_state();
+        let menu_state = registry::context_menu_state(paths);
 
         println!("{}", output::banner());
         println!();
