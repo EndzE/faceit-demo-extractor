@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
-use std::thread::sleep;
+use std::thread::{self, sleep};
 use std::time::{Duration, Instant, SystemTime};
 
 use assert_cmd::Command;
@@ -746,6 +746,38 @@ fn duplicate_queue_entries_are_collapsed_on_take() {
         queue::take_queue_files(&paths),
         vec![PathBuf::from(r"C:\demo.zst")]
     );
+}
+
+#[test]
+fn duplicate_queue_entries_are_collapsed_across_poll_ticks() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let target = directory.path().join("demo.zst");
+    fs::write(&target, b"x").unwrap();
+
+    let collector_paths = paths.clone();
+    let handle = thread::spawn(move || {
+        queue::collect_queued_files_with_timing(
+            &collector_paths,
+            Duration::from_millis(250),
+            Duration::from_millis(500),
+            Duration::from_secs(5),
+        )
+    });
+
+    let first = queue::enqueue_paths(&paths, &[target.clone().into_os_string()]).unwrap();
+    assert_eq!(first.queued, 1);
+
+    // Wait long enough for collect_queued_files_with_timing to take the first batch
+    // and remove the .path file from disk
+    thread::sleep(Duration::from_millis(100));
+
+    // Enqueue the exact same file in a subsequent tick while the idle window is active
+    let second = queue::enqueue_paths(&paths, &[target.clone().into_os_string()]).unwrap();
+    assert_eq!(second.queued, 1);
+
+    let collected = handle.join().unwrap();
+    assert_eq!(collected, vec![target]);
 }
 
 #[test]

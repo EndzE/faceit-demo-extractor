@@ -265,6 +265,7 @@ pub fn collect_queued_files_with_timing(
     max_total: Duration,
 ) -> Vec<PathBuf> {
     let mut collected = Vec::new();
+    let mut seen = HashSet::new();
     let start = Instant::now();
     let mut last = start;
 
@@ -276,7 +277,11 @@ pub fn collect_queued_files_with_timing(
         let batch = take_queue_files(paths);
 
         if !batch.is_empty() {
-            collected.extend(batch);
+            for path in batch {
+                if seen.insert(path_key(&path)) {
+                    collected.push(path);
+                }
+            }
             last = Instant::now();
             sleep(POLL_INTERVAL);
             continue;
