@@ -91,16 +91,27 @@ fn dispatch(args: &[OsString]) -> i32 {
     let first = first.unwrap_or_default();
 
     if REGISTRY_FLAGS.contains(&first) {
+        if let Some(code) = reject_extra_args(first, args) {
+            return code;
+        }
         return run_registry_action(first, &paths);
     }
 
     match first {
         "--status" => {
+            if let Some(code) = reject_extra_args(first, args) {
+                return code;
+            }
             println!("{}", status_lines(&paths).join("\n"));
             0
         }
         "--context-menu" => run_context_menu(&paths, &args[1..]),
-        "--queue-worker" => queue::run_worker(&paths),
+        "--queue-worker" => {
+            if let Some(code) = reject_extra_args(first, args) {
+                return code;
+            }
+            queue::run_worker(&paths)
+        }
         "--" => {
             let rest = &args[1..];
             if rest.is_empty() {
@@ -130,6 +141,16 @@ fn run_test(args: &[OsString]) -> i32 {
         extract::ExtractResult::Ok => 0,
         extract::ExtractResult::Failed => 1,
         extract::ExtractResult::Cancelled => 130,
+    }
+}
+
+fn reject_extra_args(flag: &str, args: &[OsString]) -> Option<i32> {
+    if args.len() > 1 {
+        output::error(format!("{flag} does not take additional arguments"));
+        print!("{}", usage());
+        Some(2)
+    } else {
+        None
     }
 }
 

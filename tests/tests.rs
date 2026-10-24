@@ -1186,6 +1186,28 @@ fn unknown_option_exits_two() {
 }
 
 #[test]
+fn flag_commands_reject_trailing_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+
+    for flag in [
+        "--status",
+        "--install",
+        "--remove",
+        "--update-label",
+        "--queue-worker",
+    ] {
+        cli(directory.path())
+            .arg(flag)
+            .arg("unexpected_arg")
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(format!(
+                "{flag} does not take additional arguments"
+            )));
+    }
+}
+
+#[test]
 fn dash_dash_without_files_exits_two() {
     let directory = tempfile::tempdir().unwrap();
 
