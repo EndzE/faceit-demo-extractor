@@ -34,7 +34,7 @@ pub fn is_valid_filename(name: &str) -> bool {
     if name.chars().any(|ch| INVALID_FILENAME_CHARS.contains(&ch)) {
         return false;
     }
-    if name.ends_with('.') || name.ends_with(' ') {
+    if name.starts_with(' ') || name.ends_with('.') || name.ends_with(' ') {
         return false;
     }
     for ch in name.chars() {

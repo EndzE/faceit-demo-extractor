@@ -105,6 +105,8 @@ fn filename_validation_rejects_invalid_windows_names() {
     assert!(!is_valid_filename("bad<name"));
     assert!(!is_valid_filename("trailing."));
     assert!(!is_valid_filename("trailing "));
+    assert!(!is_valid_filename(" leading"));
+    assert!(!is_valid_filename(" tab\t"));
     assert!(!is_valid_filename("tab\tname"));
     assert!(!is_valid_filename("del\u{007f}"));
     assert!(!is_valid_filename("zero\u{200b}width"));
@@ -122,6 +124,8 @@ fn demo_filename_validation_requires_dem_extension() {
     assert!(!is_valid_demo_filename("1"));
     assert!(!is_valid_demo_filename("1.dem.txt"));
     assert!(!is_valid_demo_filename("con.dem"));
+    assert!(!is_valid_demo_filename(" 1.dem"));
+    assert!(!is_valid_demo_filename("1.dem "));
 }
 
 #[test]
@@ -217,6 +221,12 @@ fn config_rejects_target_filename_without_dem_extension() {
 
     fs::write(&path, r#"{"target_filename": "DEMO.DEM"}"#).unwrap();
     assert_eq!(config::load_config(&path).target_filename, "DEMO.DEM");
+
+    fs::write(&path, r#"{"target_filename": "  spaced.dem  "}"#).unwrap();
+    assert_eq!(config::load_config(&path).target_filename, "spaced.dem");
+
+    fs::write(&path, r#"{"target_filename": "   "}"#).unwrap();
+    assert_eq!(config::load_config(&path).target_filename, "1.dem");
 }
 
 #[test]

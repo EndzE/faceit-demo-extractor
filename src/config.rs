@@ -89,8 +89,18 @@ pub fn load_config(path: &Path) -> Config {
         .unwrap_or_else(|| Value::String(DEFAULT_TARGET_FILENAME.to_string()));
 
     match &name_value {
-        Value::String(name) if is_valid_demo_filename(name) => {
-            config.target_filename = name.clone();
+        Value::String(name) => {
+            let trimmed = name.trim();
+            if is_valid_demo_filename(trimmed) {
+                config.target_filename = trimmed.to_string();
+            } else {
+                warn_config_once(
+                    "target_filename",
+                    format!(
+                        "invalid \"target_filename\" value {name_value} in config.json; it must be a single .dem filename; using the default {DEFAULT_TARGET_FILENAME}"
+                    ),
+                );
+            }
         }
         _ => {
             warn_config_once(
