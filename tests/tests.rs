@@ -514,6 +514,18 @@ fn test_archive_verifies_checksum_without_writing() {
 }
 
 #[test]
+fn inspect_zstd_header_handles_large_blocks_with_compact_buffer() {
+    let path = std::path::Path::new(
+        r"C:\Users\User\Downloads\1-0a0a90f7-0e49-4a87-8e94-8bbcc758f22d-1-1.dem.zst",
+    );
+    if !path.is_file() {
+        return;
+    }
+
+    assert_eq!(extract::test_archive(path), ExtractResult::Ok);
+}
+
+#[test]
 fn test_archive_rejects_checksum_mismatch() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("corrupt.dem.zst");
