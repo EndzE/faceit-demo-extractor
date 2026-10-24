@@ -688,14 +688,26 @@ fn run_menu(paths: &Paths) -> i32 {
                 )
             );
         }
-        println!(
-            "{}",
-            menu_option(
-                "5",
-                "Change delimiter",
-                Some(output::strong(format!("\"{}\"", config.delimiter)))
-            )
-        );
+        let delimiter_display = format!("\"{}\"", config.delimiter);
+        if config.rename_demo {
+            println!(
+                "{}",
+                menu_option(
+                    "5",
+                    "Change delimiter",
+                    Some(output::strong(&delimiter_display))
+                )
+            );
+        } else {
+            println!(
+                "{}",
+                menu_option_disabled(
+                    "5",
+                    "Change delimiter",
+                    Some(&delimiter_display)
+                )
+            );
+        }
         println!(
             "{}",
             menu_option(
@@ -741,7 +753,16 @@ fn run_menu(paths: &Paths) -> i32 {
                     );
                 }
             }
-            "5" => menu_change_delimiter(paths),
+            "5" => {
+                if config.rename_demo {
+                    menu_change_delimiter(paths);
+                } else {
+                    println!(
+                        "  {}",
+                        output::caution("Change delimiter is disabled while Rename demo is off.")
+                    );
+                }
+            }
             "6" => menu_toggle_keep_zst(paths),
             "7" => menu_toggle_recycle_bin(paths),
             _ => println!(

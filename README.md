@@ -64,7 +64,7 @@ A failed extraction never removes the archive or replaces an existing demo.
 
 Open `faceit-dem.exe` to change interactive options:
 
-- **Rename demo** - turn demo renaming on or off (`On` / `Off`). When turned off, demos keep their original download names (e.g. `match123.dem`) and "Change demo filename" is disabled
+- **Rename demo** - turn demo renaming on or off (`On` / `Off`). When turned off, demos keep their original download names (e.g. `match123.dem`), and "Change demo filename" and "Change delimiter" are disabled
 - **Change demo filename** - choose the name used for extracted demos when renaming is turned on (such as `1.dem`)
 - **Change delimiter** - separator placed before numbers for batches or existing demos (default: `"_"`). Can be changed to anything valid (such as `"-"`), or empty (`""`) to produce names like `11.dem`, `12.dem`
 - **Keep original archives** - keep `.zst` and `.bz2` archives after extraction

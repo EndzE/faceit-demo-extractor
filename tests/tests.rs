@@ -1530,11 +1530,14 @@ fn menu_disables_change_demo_filename_when_rename_demo_is_off() {
     .unwrap();
 
     cli(directory.path())
-        .write_stdin("4\n0\n")
+        .write_stdin("4\n5\n0\n")
         .assert()
         .success()
         .stdout(predicate::str::contains(
             "Change demo filename is disabled while Rename demo is off.",
+        ))
+        .stdout(predicate::str::contains(
+            "Change delimiter is disabled while Rename demo is off.",
         ));
 }
 
