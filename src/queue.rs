@@ -552,7 +552,8 @@ pub fn run_worker(paths: &Paths) -> i32 {
                         continue;
                     }
                     Ok(None) => {
-                        return if any_failed { 1 } else { 0 };
+                        cleanup_own_worker_pid(paths);
+                        break;
                     }
                     Err(err) => {
                         output::error(format!("could not open the worker lock: {err}"));

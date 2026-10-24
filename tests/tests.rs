@@ -977,6 +977,62 @@ fn retirement_rescan_keeps_late_files() {
 }
 
 #[test]
+fn worker_breaks_cleanly_when_handoff_lock_is_lost() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let csgo = directory.path().join("csgo");
+    fs::create_dir_all(&csgo).unwrap();
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "target_filename": "1.dem",
+            "keep_zst": true,
+            "move_to_recycle_bin": false,
+            "csgo_path": "csgo"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let input = directory.path().join("demo.dem.zst");
+    let payload = demo_payload(1024);
+    write_archive(&input, &payload, true);
+    queue::enqueue_paths(&paths, &[input.into_os_string()]).unwrap();
+
+    let worker_paths = paths.clone();
+    let worker = thread::spawn(move || {
+        queue::run_worker(&worker_paths)
+    });
+
+    let output = csgo.join("1.dem");
+    assert!(
+        wait_until(|| output.is_file(), Duration::from_secs(5)),
+        "the demo was not extracted"
+    );
+
+    assert!(
+        wait_until(
+            || queue::worker_lock_is_free(&paths).unwrap_or(false),
+            Duration::from_secs(5)
+        ),
+        "the worker lock did not become free"
+    );
+
+    let late = directory.path().join("late.dem.zst");
+    fs::write(&late, b"x").unwrap();
+    queue::enqueue_paths(&paths, &[late.into_os_string()]).unwrap();
+
+    let rival_lock = queue::try_acquire_worker_lock(&paths)
+        .unwrap()
+        .expect("rival lock acquisition");
+
+    let exit_code = worker.join().unwrap();
+    assert_eq!(exit_code, 0);
+
+    drop(rival_lock);
+}
+
+#[test]
 fn worker_pid_round_trips() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
