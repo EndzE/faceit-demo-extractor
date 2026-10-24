@@ -64,13 +64,13 @@ A failed extraction never removes the archive or replaces an existing demo.
 
 Open `faceit-dem.exe` to change interactive options:
 
-- **Change demo filename** - choose the name used for extracted demos, such as `1.dem`
+- **Rename demo** - turn demo renaming on or off (`On` / `Off`). When turned off, demos keep their original download names (e.g. `match123.dem`) and "Change demo filename" is disabled
+- **Change demo filename** - choose the name used for extracted demos when renaming is turned on (such as `1.dem`)
 - **Keep original archives** - keep `.zst` and `.bz2` archives after extraction
 - **Use the Recycle Bin** - move removed archives to the Recycle Bin
 
 Additional options can be configured in `config.json`:
 
-- **rename_demo** - `true` (default) to rename extracted demos to your configured demo filename (such as `1.dem`), or `false` to keep their original names without renaming (e.g. `match123.dem`)
 - **overwrite_single_file_extraction** - `true` (default) to overwrite `1.dem` on single-file extraction, or `false` to preserve existing files and pick the next free name (`1_1.dem`, etc.)
 - **csgo_path** - custom path to your CS2 `game\csgo` folder
 

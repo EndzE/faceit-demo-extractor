@@ -506,10 +506,58 @@ fn menu_toggle_recycle_bin(paths: &Paths) {
     }
 }
 
+fn menu_toggle_rename_demo(paths: &Paths) {
+    let rename = !config::load_config(&paths.config).rename_demo;
+
+    match config::save_config(&paths.config, &[("rename_demo", Value::Bool(rename))]) {
+        Ok(()) => {
+            if rename {
+                println!(
+                    "  {} Demos will be renamed during extraction.",
+                    output::good("On.")
+                );
+            } else {
+                println!(
+                    "  {} Demos will keep their original names.",
+                    output::caution("Off.")
+                );
+            }
+
+            if registry::context_menu_installed() {
+                println!();
+                let Some(answer) = read_line("  Update the right-click menu text? [y/N]: ") else {
+                    return;
+                };
+                let answer = answer.trim().to_lowercase();
+
+                if answer == "y" || answer == "yes" {
+                    match registry::perform_update_label(paths) {
+                        Ok(()) => println!("  {}", output::good("Right-click menu text updated.")),
+                        Err(message) => output::error(message),
+                    }
+                }
+            }
+        }
+        Err(message) => output::error(message),
+    }
+}
+
 fn menu_option(key: &str, name: &str, value: Option<String>) -> String {
     match value {
         Some(value) => format!("  {}  {:<MENU_WIDTH$}  {value}", output::title(key), name),
         None => format!("  {}  {name}", output::title(key)),
+    }
+}
+
+fn menu_option_disabled(key: &str, name: &str, value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!(
+            "  {}  {:<MENU_WIDTH$}  {}",
+            output::muted(key),
+            output::muted(name),
+            output::muted(value)
+        ),
+        None => format!("  {}  {}", output::muted(key), output::muted(name)),
     }
 }
 
@@ -570,14 +618,33 @@ fn run_menu(paths: &Paths) -> i32 {
             "{}",
             menu_option(
                 "3",
-                "Change demo filename",
-                Some(output::strong(&config.target_filename))
+                "Rename demo",
+                Some(output::on_off(config.rename_demo))
             )
         );
+        if config.rename_demo {
+            println!(
+                "{}",
+                menu_option(
+                    "4",
+                    "Change demo filename",
+                    Some(output::strong(&config.target_filename))
+                )
+            );
+        } else {
+            println!(
+                "{}",
+                menu_option_disabled(
+                    "4",
+                    "Change demo filename",
+                    Some(&config.target_filename)
+                )
+            );
+        }
         println!(
             "{}",
             menu_option(
-                "4",
+                "5",
                 "Keep original archives",
                 Some(output::on_off(config.keep_zst))
             )
@@ -585,7 +652,7 @@ fn run_menu(paths: &Paths) -> i32 {
         println!(
             "{}",
             menu_option(
-                "5",
+                "6",
                 "Use the Recycle Bin",
                 Some(output::on_off(config.move_to_recycle_bin))
             )
@@ -593,7 +660,7 @@ fn run_menu(paths: &Paths) -> i32 {
         println!("{}", menu_option("0", "Exit", None));
         println!();
 
-        let Some(choice) = read_line("  Select an option [0-5]: ") else {
+        let Some(choice) = read_line("  Select an option [0-6]: ") else {
             println!();
             break;
         };
@@ -608,12 +675,22 @@ fn run_menu(paths: &Paths) -> i32 {
             "0" | "q" | "quit" | "exit" => break,
             "1" => menu_install(paths),
             "2" => menu_remove(),
-            "3" => menu_change_filename(paths),
-            "4" => menu_toggle_keep_zst(paths),
-            "5" => menu_toggle_recycle_bin(paths),
+            "3" => menu_toggle_rename_demo(paths),
+            "4" => {
+                if config.rename_demo {
+                    menu_change_filename(paths);
+                } else {
+                    println!(
+                        "  {}",
+                        output::caution("Change demo filename is disabled while Rename demo is off.")
+                    );
+                }
+            }
+            "5" => menu_toggle_keep_zst(paths),
+            "6" => menu_toggle_recycle_bin(paths),
             _ => println!(
                 "  {}",
-                output::caution(format!("Unknown option: {choice}. Choose 0-5."))
+                output::caution(format!("Unknown option: {choice}. Choose 0-6."))
             ),
         }
     }

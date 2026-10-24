@@ -1431,12 +1431,54 @@ fn menu_renders_and_exits_cleanly() {
         .write_stdin("0\n")
         .assert()
         .success()
+        .stdout(predicate::str::contains("Rename demo"))
         .stdout(predicate::str::contains("Change demo filename"))
         .stdout(predicate::str::contains("Keep original archives"))
         .stdout(predicate::str::contains("Use the Recycle Bin"))
-        .stdout(predicate::str::contains("Select an option [0-5]"))
+        .stdout(predicate::str::contains("Select an option [0-6]"))
         .stdout(predicate::str::contains("Goodbye."))
         .stdout(predicate::str::contains("\u{1b}[").not());
+}
+
+#[test]
+fn menu_disables_change_demo_filename_when_rename_demo_is_off() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "rename_demo": false
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    cli(directory.path())
+        .write_stdin("4\n0\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Change demo filename is disabled while Rename demo is off.",
+        ));
+}
+
+#[test]
+fn menu_option_3_toggles_rename_demo() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    config::ensure_config_file(&paths.config, false);
+
+    assert!(config::load_config(&paths.config).rename_demo);
+
+    cli(directory.path())
+        .write_stdin("3\n0\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Demos will keep their original names.",
+        ));
+
+    assert!(!config::load_config(&paths.config).rename_demo);
 }
 
 #[test]
