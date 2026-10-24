@@ -223,7 +223,7 @@ pub fn usage() -> String {
             output::muted("File")
         ),
         format!(
-            "  {}  target_filename, keep_zst, move_to_recycle_bin, overwrite_single_file_extraction, csgo_path",
+            "  {}  target_filename, keep_zst, move_to_recycle_bin, overwrite_single_file_extraction, rename_demo, csgo_path",
             output::muted("Keys")
         ),
         String::new(),
@@ -283,6 +283,10 @@ pub fn status_lines_for(paths: &Paths, menus: &[registry::ContextMenu]) -> Vec<S
     lines.push(output::field(
         "Overwrite single",
         output::on_off(config.overwrite_single_file_extraction),
+    ));
+    lines.push(output::field(
+        "Rename demo",
+        output::on_off(config.rename_demo),
     ));
 
     lines.push(String::new());

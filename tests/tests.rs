@@ -209,6 +209,7 @@ fn config_falls_back_on_invalid_values() {
     assert!(!config.keep_zst);
     assert!(config.move_to_recycle_bin);
     assert!(config.overwrite_single_file_extraction);
+    assert!(config.rename_demo);
     assert_eq!(config.csgo_path, None);
 }
 
@@ -317,6 +318,7 @@ fn ensure_config_adds_missing_keys_only() {
         saved["overwrite_single_file_extraction"],
         serde_json::Value::Bool(true)
     );
+    assert_eq!(saved["rename_demo"], serde_json::Value::Bool(true));
     assert_eq!(saved["csgo_path"], serde_json::Value::Null);
 }
 
@@ -337,6 +339,7 @@ fn ensure_config_resets_invalid_json_and_non_object() {
             "keep_zst": false,
             "move_to_recycle_bin": false,
             "overwrite_single_file_extraction": true,
+            "rename_demo": true,
             "csgo_path": null
         })
     );
@@ -749,6 +752,53 @@ fn single_file_extraction_respects_overwrite_setting() {
     let code = extract::run_extract_batch(&[input4], &csgo, "test", &config, false);
     assert_eq!(code, 0);
     assert_eq!(fs::read(csgo.join("1.dem")).unwrap(), payload4);
+}
+
+#[test]
+fn extraction_preserves_original_names_when_rename_demo_is_false() {
+    let directory = tempfile::tempdir().unwrap();
+    let csgo = directory.path().join("csgo");
+    fs::create_dir(&csgo).unwrap();
+
+    let input1 = directory.path().join("match_alpha.dem.zst");
+    let input2 = directory.path().join("match_beta.dem.bz2");
+    let payload1 = demo_payload(512);
+    let payload2 = demo_payload(1024);
+    write_archive(&input1, &payload1, true);
+    write_bzip2_archive(&input2, &payload2);
+
+    let mut config = Config::defaults();
+    config.rename_demo = false;
+
+    // 1. Single file extraction preserves original filename
+    let code = extract::run_extract_batch(&[input1.clone()], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert!(csgo.join("match_alpha.dem").exists());
+    assert!(!csgo.join("1.dem").exists());
+    assert_eq!(fs::read(csgo.join("match_alpha.dem")).unwrap(), payload1);
+
+    // 2. Batch extraction preserves original filenames
+    let input3 = directory.path().join("match_gamma.dem.zst");
+    let payload3 = demo_payload(2048);
+    write_archive(&input3, &payload3, true);
+
+    let code = extract::run_extract_batch(&[input2, input3], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert!(csgo.join("match_beta.dem").exists());
+    assert!(csgo.join("match_gamma.dem").exists());
+    assert_eq!(fs::read(csgo.join("match_beta.dem")).unwrap(), payload2);
+    assert_eq!(fs::read(csgo.join("match_gamma.dem")).unwrap(), payload3);
+
+    // 3. Collision with overwrite_single_file_extraction = false uses next_free_name
+    config.overwrite_single_file_extraction = false;
+    let input1_dup = directory.path().join("match_alpha.dem.zst");
+    let payload1_new = demo_payload(4096);
+    write_archive(&input1_dup, &payload1_new, true);
+
+    let code = extract::run_extract_batch(&[input1_dup], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert_eq!(fs::read(csgo.join("match_alpha.dem")).unwrap(), payload1);
+    assert_eq!(fs::read(csgo.join("match_alpha_1.dem")).unwrap(), payload1_new);
 }
 
 #[test]

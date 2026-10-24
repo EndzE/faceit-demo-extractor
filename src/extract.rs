@@ -837,6 +837,27 @@ pub fn split_ext(name: &str) -> (String, String) {
     (base[..dot].to_string(), base[dot..].to_string())
 }
 
+pub fn uncompressed_demo_name(input: &Path) -> String {
+    let file_name = input
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "demo.dem".to_string());
+
+    let (stem, ext) = split_ext(&file_name);
+    let lower_ext = ext.to_ascii_lowercase();
+    let name = if lower_ext == ".zst" || lower_ext == ".bz2" {
+        stem
+    } else {
+        file_name
+    };
+
+    if name.to_ascii_lowercase().ends_with(".dem") {
+        name
+    } else {
+        format!("{name}.dem")
+    }
+}
+
 fn name_with_suffix(stem: &str, suffix: &str, ext: &str) -> String {
     let mut stem = stem.to_string();
     while !stem.is_empty()
@@ -947,7 +968,29 @@ pub fn run_extract_batch(
             return 130;
         }
 
-        let out_name = if total == 1 {
+        let out_name = if !config.rename_demo {
+            let natural = uncompressed_demo_name(input);
+            if total == 1 {
+                println!("{}", output::field("Input", input.display()));
+                if config.overwrite_single_file_extraction || !csgo.join(&natural).exists() {
+                    natural
+                } else {
+                    let (stem, ext) = split_ext(&natural);
+                    next_free_name(csgo, stem, &ext)
+                }
+            } else {
+                println!(
+                    "{}",
+                    output::title(format!("[{}/{}] {}", index + 1, total, input.display()))
+                );
+                if !csgo.join(&natural).exists() {
+                    natural
+                } else {
+                    let (stem, ext) = split_ext(&natural);
+                    next_free_name(csgo, stem, &ext)
+                }
+            }
+        } else if total == 1 {
             println!("{}", output::field("Input", input.display()));
             if config.overwrite_single_file_extraction || !csgo.join(target).exists() {
                 target.clone()
@@ -1248,5 +1291,29 @@ mod tests {
 
         fs::write(&input, b"\x00\x01\x02\x03\x04").unwrap();
         assert!(check_header(&input).is_none());
+    }
+
+    #[test]
+    fn uncompressed_demo_name_strips_archive_extension_and_ensures_dem() {
+        assert_eq!(
+            uncompressed_demo_name(Path::new(r"C:\demos\match-12345.dem.zst")),
+            "match-12345.dem"
+        );
+        assert_eq!(
+            uncompressed_demo_name(Path::new(r"C:\demos\match-12345.dem.bz2")),
+            "match-12345.dem"
+        );
+        assert_eq!(
+            uncompressed_demo_name(Path::new(r"C:\demos\match-12345.zst")),
+            "match-12345.dem"
+        );
+        assert_eq!(
+            uncompressed_demo_name(Path::new(r"C:\demos\match-12345.dem")),
+            "match-12345.dem"
+        );
+        assert_eq!(
+            uncompressed_demo_name(Path::new(r"C:\demos\MATCH.DEM.ZST")),
+            "MATCH.DEM"
+        );
     }
 }

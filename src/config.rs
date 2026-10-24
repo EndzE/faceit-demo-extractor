@@ -10,7 +10,7 @@ use crate::output::{self, warn};
 use crate::validate::is_valid_demo_filename;
 use crate::{
     DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN, DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
-    DEFAULT_TARGET_FILENAME,
+    DEFAULT_RENAME_DEMO, DEFAULT_TARGET_FILENAME,
 };
 
 static CONFIG_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -21,6 +21,7 @@ pub struct Config {
     pub keep_zst: bool,
     pub move_to_recycle_bin: bool,
     pub overwrite_single_file_extraction: bool,
+    pub rename_demo: bool,
     pub csgo_path: Option<String>,
 }
 
@@ -31,6 +32,7 @@ impl Config {
             keep_zst: DEFAULT_KEEP_ZST,
             move_to_recycle_bin: DEFAULT_MOVE_TO_RECYCLE_BIN,
             overwrite_single_file_extraction: DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
+            rename_demo: DEFAULT_RENAME_DEMO,
             csgo_path: None,
         }
     }
@@ -47,6 +49,7 @@ impl Config {
                 "overwrite_single_file_extraction",
                 Value::Bool(self.overwrite_single_file_extraction),
             ),
+            ("rename_demo", Value::Bool(self.rename_demo)),
             (
                 "csgo_path",
                 self.csgo_path
@@ -129,6 +132,7 @@ pub fn load_config(path: &Path) -> Config {
         "overwrite_single_file_extraction",
         DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
     );
+    config.rename_demo = coerce_bool(&data, "rename_demo", DEFAULT_RENAME_DEMO);
     config.csgo_path = match data.get("csgo_path") {
         Some(Value::String(path)) if !path.trim().is_empty() => {
             Some(path.trim().trim_matches('"').to_string())

@@ -146,12 +146,20 @@ pub fn remove_context_menu_at(root: &str) -> Result<(), String> {
     }
 }
 
+fn expected_menu_label(paths: &Paths) -> String {
+    let config = config::load_config(&paths.config);
+    if config.rename_demo {
+        menu_label_for(&config.target_filename)
+    } else {
+        "Extract to CS2 folder".to_string()
+    }
+}
+
 fn install_context_menu_with(paths: &Paths, root: &str) -> Result<(), String> {
     ensure_install_binaries(paths)?;
-    let target = config::load_config(&paths.config).target_filename;
     install_context_menu_at(
         root,
-        &menu_label_for(&target),
+        &expected_menu_label(paths),
         &build_context_menu_command(paths),
     )
 }
@@ -178,8 +186,7 @@ pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), String> 
         return Err("the right-click menu is not installed; nothing to update".to_string());
     }
 
-    let target = config::load_config(&paths.config).target_filename;
-    set_context_menu_label_at(root, &menu_label_for(&target))
+    set_context_menu_label_at(root, &expected_menu_label(paths))
 }
 
 pub fn perform_update_label(paths: &Paths) -> Result<(), String> {

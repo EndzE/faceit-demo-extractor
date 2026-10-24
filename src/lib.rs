@@ -19,6 +19,7 @@ pub const DEFAULT_TARGET_FILENAME: &str = "1.dem";
 pub const DEFAULT_KEEP_ZST: bool = false;
 pub const DEFAULT_MOVE_TO_RECYCLE_BIN: bool = false;
 pub const DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION: bool = true;
+pub const DEFAULT_RENAME_DEMO: bool = true;
 
 pub const DEMO_MAGIC: &[u8] = b"PBDEMS2\x00";
 pub const MAX_FILENAME_LEN: usize = 255;
