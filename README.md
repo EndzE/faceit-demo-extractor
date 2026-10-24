@@ -66,11 +66,13 @@ Open `faceit-dem.exe` to change interactive options:
 
 - **Rename demo** - turn demo renaming on or off (`On` / `Off`). When turned off, demos keep their original download names (e.g. `match123.dem`) and "Change demo filename" is disabled
 - **Change demo filename** - choose the name used for extracted demos when renaming is turned on (such as `1.dem`)
+- **Change delimiter** - separator placed before numbers for batches or existing demos (default: `"_"`). Can be changed to anything valid (such as `"-"`), or empty (`""`) to produce names like `11.dem`, `12.dem`
 - **Keep original archives** - keep `.zst` and `.bz2` archives after extraction
 - **Use the Recycle Bin** - move removed archives to the Recycle Bin
 
 Additional options can be configured in `config.json`:
 
+- **delimiter** - separator string before numbers (default: `"_"`). Set to `""` for no separator
 - **overwrite_single_file_extraction** - `true` (default) to overwrite `1.dem` on single-file extraction, or `false` to preserve existing files and pick the next free name (`1_1.dem`, etc.)
 - **csgo_path** - custom path to your CS2 `game\csgo` folder
 

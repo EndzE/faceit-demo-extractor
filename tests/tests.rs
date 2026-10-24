@@ -165,12 +165,12 @@ fn next_free_name_finds_gaps_and_trims_long_stems() {
     File::create(directory.path().join("1_3.dem")).unwrap();
 
     assert_eq!(
-        extract::next_free_name(directory.path(), "1".to_string(), ".dem"),
+        extract::next_free_name(directory.path(), "1".to_string(), ".dem", "_"),
         "1_2.dem"
     );
 
     let long_stem = "a".repeat(300);
-    let name = extract::next_free_name(directory.path(), long_stem, ".dem");
+    let name = extract::next_free_name(directory.path(), long_stem, ".dem", "_");
     assert!(utf16_len(&name) <= MAX_FILENAME_LEN);
     assert!(name.ends_with("_1.dem"));
 }
@@ -200,12 +200,13 @@ fn config_falls_back_on_invalid_values() {
     let path = directory.path().join("config.json");
     fs::write(
         &path,
-        r#"{"target_filename": 7, "keep_zst": "yes", "move_to_recycle_bin": true, "csgo_path": 7}"#,
+        r#"{"target_filename": 7, "delimiter": "*invalid*", "keep_zst": "yes", "move_to_recycle_bin": true, "csgo_path": 7}"#,
     )
     .unwrap();
 
     let config = config::load_config(&path);
     assert_eq!(config.target_filename, "1.dem");
+    assert_eq!(config.delimiter, "_");
     assert!(!config.keep_zst);
     assert!(config.move_to_recycle_bin);
     assert!(config.overwrite_single_file_extraction);
@@ -312,6 +313,10 @@ fn ensure_config_adds_missing_keys_only() {
         serde_json::Value::from("demo.dem")
     );
     assert_eq!(saved["custom"], serde_json::Value::Bool(true));
+    assert_eq!(
+        saved["delimiter"],
+        serde_json::Value::String("_".to_string())
+    );
     assert_eq!(saved["keep_zst"], serde_json::Value::Bool(false));
     assert_eq!(saved["move_to_recycle_bin"], serde_json::Value::Bool(false));
     assert_eq!(
@@ -337,6 +342,7 @@ fn ensure_config_resets_invalid_json_and_non_object() {
         serde_json::json!({
             "rename_demo": true,
             "target_filename": "1.dem",
+            "delimiter": "_",
             "keep_zst": false,
             "move_to_recycle_bin": false,
             "overwrite_single_file_extraction": true,
@@ -803,6 +809,71 @@ fn extraction_preserves_original_names_when_rename_demo_is_false() {
     assert_eq!(code, 0);
     assert_eq!(fs::read(csgo.join("match_alpha.dem")).unwrap(), payload1);
     assert_eq!(fs::read(csgo.join("match_alpha_1.dem")).unwrap(), payload1_new);
+}
+
+#[test]
+fn extraction_respects_custom_delimiter_for_batch_and_single() {
+    let directory = tempfile::tempdir().unwrap();
+    let csgo = directory.path().join("csgo");
+    fs::create_dir(&csgo).unwrap();
+
+    let input1 = directory.path().join("demo1.dem.zst");
+    let input2 = directory.path().join("demo2.dem.zst");
+    let payload1 = demo_payload(512);
+    let payload2 = demo_payload(1024);
+    write_archive(&input1, &payload1, true);
+    write_archive(&input2, &payload2, true);
+
+    // 1. Delimiter = "" (empty string) produces "11.dem", "12.dem" in batch
+    let mut config = Config::defaults();
+    config.delimiter = String::new();
+
+    let code = extract::run_extract_batch(
+        &[input1.clone(), input2.clone()],
+        &csgo,
+        "test",
+        &config,
+        false,
+    );
+    assert_eq!(code, 0);
+    assert!(csgo.join("11.dem").exists());
+    assert!(csgo.join("12.dem").exists());
+    assert_eq!(fs::read(csgo.join("11.dem")).unwrap(), payload1);
+    assert_eq!(fs::read(csgo.join("12.dem")).unwrap(), payload2);
+
+    // 2. Delimiter = "" for single file when 1.dem exists and overwrite_single_file_extraction = false
+    fs::write(csgo.join("1.dem"), b"existing 1.dem").unwrap();
+    config.overwrite_single_file_extraction = false;
+    let input3 = directory.path().join("demo3.dem.zst");
+    let payload3 = demo_payload(2048);
+    write_archive(&input3, &payload3, true);
+
+    // Since 11 and 12 already exist from above, it picks 13
+    let code = extract::run_extract_batch(&[input3], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert!(csgo.join("13.dem").exists());
+    assert_eq!(fs::read(csgo.join("13.dem")).unwrap(), payload3);
+
+    // 3. Delimiter = "-" produces "1-1.dem"
+    let csgo_dash = directory.path().join("csgo_dash");
+    fs::create_dir(&csgo_dash).unwrap();
+    config.delimiter = "-".to_string();
+
+    let input4 = directory.path().join("demo4.dem.zst");
+    let payload4 = demo_payload(4096);
+    write_archive(&input4, &payload4, true);
+
+    let code = extract::run_extract_batch(&[input4], &csgo_dash, "test", &config, false);
+    assert_eq!(code, 0);
+    assert!(csgo_dash.join("1.dem").exists());
+
+    let input5 = directory.path().join("demo5.dem.zst");
+    let payload5 = demo_payload(8192);
+    write_archive(&input5, &payload5, true);
+    let code = extract::run_extract_batch(&[input5], &csgo_dash, "test", &config, false);
+    assert_eq!(code, 0);
+    assert!(csgo_dash.join("1-1.dem").exists());
+    assert_eq!(fs::read(csgo_dash.join("1-1.dem")).unwrap(), payload5);
 }
 
 #[test]
@@ -1437,9 +1508,10 @@ fn menu_renders_and_exits_cleanly() {
         .success()
         .stdout(predicate::str::contains("Rename demo"))
         .stdout(predicate::str::contains("Change demo filename"))
+        .stdout(predicate::str::contains("Change delimiter"))
         .stdout(predicate::str::contains("Keep original archives"))
         .stdout(predicate::str::contains("Use the Recycle Bin"))
-        .stdout(predicate::str::contains("Select an option [0-6]"))
+        .stdout(predicate::str::contains("Select an option [0-7]"))
         .stdout(predicate::str::contains("Goodbye."))
         .stdout(predicate::str::contains("\u{1b}[").not());
 }
@@ -1483,6 +1555,45 @@ fn menu_option_3_toggles_rename_demo() {
         ));
 
     assert!(!config::load_config(&paths.config).rename_demo);
+}
+
+#[test]
+fn menu_option_5_changes_delimiter_and_rejects_forbidden_symbols() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    config::ensure_config_file(&paths.config, false);
+
+    assert_eq!(config::load_config(&paths.config).delimiter, "_");
+
+    // Rejects forbidden symbol '*'
+    cli(directory.path())
+        .write_stdin("5\n*invalid*\n0\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Invalid delimiter. It cannot contain / \\ : * ? \" < > | or control characters",
+        ));
+
+    // Delimiter unchanged
+    assert_eq!(config::load_config(&paths.config).delimiter, "_");
+
+    // Accepts valid '-'
+    cli(directory.path())
+        .write_stdin("5\n-\n0\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Delimiter set to \"-\"."));
+
+    assert_eq!(config::load_config(&paths.config).delimiter, "-");
+
+    // Accepts empty "" via 'none'
+    cli(directory.path())
+        .write_stdin("5\nnone\n0\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Delimiter set to \"\"."));
+
+    assert_eq!(config::load_config(&paths.config).delimiter, "");
 }
 
 #[test]

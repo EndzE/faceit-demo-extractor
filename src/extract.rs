@@ -868,9 +868,15 @@ fn name_with_suffix(stem: &str, suffix: &str, ext: &str) -> String {
     format!("{stem}{suffix}{ext}")
 }
 
-fn next_free_name_with_attempts(folder: &Path, stem: &str, ext: &str, attempts: u32) -> String {
+fn next_free_name_with_attempts(
+    folder: &Path,
+    stem: &str,
+    ext: &str,
+    delimiter: &str,
+    attempts: u32,
+) -> String {
     for number in 1..attempts {
-        let candidate = name_with_suffix(stem, &format!("_{number}"), ext);
+        let candidate = name_with_suffix(stem, &format!("{delimiter}{number}"), ext);
         if !folder.join(&candidate).exists() {
             return candidate;
         }
@@ -880,11 +886,11 @@ fn next_free_name_with_attempts(folder: &Path, stem: &str, ext: &str, attempts: 
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
-    name_with_suffix(stem, &format!("_{stamp}"), ext)
+    name_with_suffix(stem, &format!("{delimiter}{stamp}"), ext)
 }
 
-pub fn next_free_name(folder: &Path, stem: String, ext: &str) -> String {
-    next_free_name_with_attempts(folder, &stem, ext, 10_000)
+pub fn next_free_name(folder: &Path, stem: String, ext: &str, delimiter: &str) -> String {
+    next_free_name_with_attempts(folder, &stem, ext, delimiter, 10_000)
 }
 
 pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> i32 {
@@ -976,7 +982,7 @@ pub fn run_extract_batch(
                     natural
                 } else {
                     let (stem, ext) = split_ext(&natural);
-                    next_free_name(csgo, stem, &ext)
+                    next_free_name(csgo, stem, &ext, &config.delimiter)
                 }
             } else {
                 println!(
@@ -987,7 +993,7 @@ pub fn run_extract_batch(
                     natural
                 } else {
                     let (stem, ext) = split_ext(&natural);
-                    next_free_name(csgo, stem, &ext)
+                    next_free_name(csgo, stem, &ext, &config.delimiter)
                 }
             }
         } else if total == 1 {
@@ -995,14 +1001,14 @@ pub fn run_extract_batch(
             if config.overwrite_single_file_extraction || !csgo.join(target).exists() {
                 target.clone()
             } else {
-                next_free_name(csgo, stem.clone(), &ext)
+                next_free_name(csgo, stem.clone(), &ext, &config.delimiter)
             }
         } else {
             println!(
                 "{}",
                 output::title(format!("[{}/{}] {}", index + 1, total, input.display()))
             );
-            next_free_name(csgo, stem.clone(), &ext)
+            next_free_name(csgo, stem.clone(), &ext, &config.delimiter)
         };
         let output_path = csgo.join(&out_name);
 
@@ -1203,7 +1209,7 @@ mod tests {
         fs::write(directory.path().join("1_1.dem"), b"x").unwrap();
         fs::write(directory.path().join("1_2.dem"), b"x").unwrap();
 
-        let name = next_free_name_with_attempts(directory.path(), "1", ".dem", 3);
+        let name = next_free_name_with_attempts(directory.path(), "1", ".dem", "_", 3);
 
         let suffix = name
             .strip_prefix("1_")

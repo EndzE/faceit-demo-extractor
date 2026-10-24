@@ -55,3 +55,28 @@ pub fn is_valid_filename(name: &str) -> bool {
     let stem = stem.to_uppercase();
     !WINDOWS_RESERVED_NAMES.contains(&stem.as_str())
 }
+
+pub fn is_valid_delimiter(delim: &str) -> bool {
+    if delim.is_empty() {
+        return true;
+    }
+    if utf16_len(delim) > 32 {
+        return false;
+    }
+    if delim.contains('/') || delim.contains('\\') {
+        return false;
+    }
+    if delim.chars().any(|ch| INVALID_FILENAME_CHARS.contains(&ch)) {
+        return false;
+    }
+    for ch in delim.chars() {
+        let code = ch as u32;
+        if code < 32 || code == 127 {
+            return false;
+        }
+        if get_general_category(ch) == GeneralCategory::Format {
+            return false;
+        }
+    }
+    true
+}

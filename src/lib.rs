@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const APP_NAME: &str = "FACEIT Demo Extractor";
 pub const DEFAULT_TARGET_FILENAME: &str = "1.dem";
+pub const DEFAULT_DELIMITER: &str = "_";
 pub const DEFAULT_KEEP_ZST: bool = false;
 pub const DEFAULT_MOVE_TO_RECYCLE_BIN: bool = false;
 pub const DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION: bool = true;

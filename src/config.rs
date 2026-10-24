@@ -7,10 +7,10 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::{Map, Value};
 
 use crate::output::{self, warn};
-use crate::validate::is_valid_demo_filename;
+use crate::validate::{is_valid_delimiter, is_valid_demo_filename};
 use crate::{
-    DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN, DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
-    DEFAULT_RENAME_DEMO, DEFAULT_TARGET_FILENAME,
+    DEFAULT_DELIMITER, DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN,
+    DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION, DEFAULT_RENAME_DEMO, DEFAULT_TARGET_FILENAME,
 };
 
 static CONFIG_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -19,6 +19,7 @@ static CONFIG_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 pub struct Config {
     pub rename_demo: bool,
     pub target_filename: String,
+    pub delimiter: String,
     pub keep_zst: bool,
     pub move_to_recycle_bin: bool,
     pub overwrite_single_file_extraction: bool,
@@ -30,6 +31,7 @@ impl Config {
         Self {
             rename_demo: DEFAULT_RENAME_DEMO,
             target_filename: DEFAULT_TARGET_FILENAME.to_string(),
+            delimiter: DEFAULT_DELIMITER.to_string(),
             keep_zst: DEFAULT_KEEP_ZST,
             move_to_recycle_bin: DEFAULT_MOVE_TO_RECYCLE_BIN,
             overwrite_single_file_extraction: DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
@@ -44,6 +46,7 @@ impl Config {
                 "target_filename",
                 Value::String(self.target_filename.clone()),
             ),
+            ("delimiter", Value::String(self.delimiter.clone())),
             ("keep_zst", Value::Bool(self.keep_zst)),
             ("move_to_recycle_bin", Value::Bool(self.move_to_recycle_bin)),
             (
@@ -119,6 +122,35 @@ pub fn load_config(path: &Path) -> Config {
                 "target_filename",
                 format!(
                     "invalid \"target_filename\" value {name_value} in config.json; it must be a single .dem filename; using the default {DEFAULT_TARGET_FILENAME}"
+                ),
+            );
+        }
+    }
+
+    let delim_value = data
+        .get("delimiter")
+        .cloned()
+        .unwrap_or_else(|| Value::String(DEFAULT_DELIMITER.to_string()));
+
+    match &delim_value {
+        Value::String(delim) => {
+            let trimmed = delim.trim();
+            if is_valid_delimiter(trimmed) {
+                config.delimiter = trimmed.to_string();
+            } else {
+                warn_config_once(
+                    "delimiter",
+                    format!(
+                        "invalid \"delimiter\" value {delim_value} in config.json; using the default \"{DEFAULT_DELIMITER}\""
+                    ),
+                );
+            }
+        }
+        _ => {
+            warn_config_once(
+                "delimiter",
+                format!(
+                    "invalid \"delimiter\" value {delim_value} in config.json; using the default \"{DEFAULT_DELIMITER}\""
                 ),
             );
         }

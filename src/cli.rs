@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::queue::ContextMenuError;
 use crate::validate::is_valid_demo_filename;
-use crate::{Paths, config, cs2, extract, output, queue, registry, win32};
+use crate::{Paths, config, cs2, extract, output, queue, registry, validate, win32};
 
 const REGISTRY_FLAGS: &[&str] = &["--install", "--remove", "--update-label"];
 const HELP_FLAGS: &[&str] = &["-h", "--help"];
@@ -223,7 +223,7 @@ pub fn usage() -> String {
             output::muted("File")
         ),
         format!(
-            "  {}  rename_demo, target_filename, keep_zst, move_to_recycle_bin, overwrite_single_file_extraction, csgo_path",
+            "  {}  rename_demo, target_filename, delimiter, keep_zst, move_to_recycle_bin, overwrite_single_file_extraction, csgo_path",
             output::muted("Keys")
         ),
         String::new(),
@@ -276,6 +276,10 @@ pub fn status_lines_for(paths: &Paths, menus: &[registry::ContextMenu]) -> Vec<S
         output::on_off(config.rename_demo),
     ));
     lines.push(output::field("Target demo", config.target_filename));
+    lines.push(output::field(
+        "Delimiter",
+        format!("\"{}\"", config.delimiter),
+    ));
     lines.push(output::field(
         "Keep archives",
         output::on_off(config.keep_zst),
@@ -542,6 +546,49 @@ fn menu_toggle_rename_demo(paths: &Paths) {
     }
 }
 
+fn menu_change_delimiter(paths: &Paths) {
+    println!("{}", output::section("Change numbering delimiter"));
+    println!(
+        "  {}",
+        output::muted("Separator used before numbers for batches or existing files (e.g. _ for 1_1.dem, - for 1-1.dem, empty for 11.dem).")
+    );
+    println!();
+
+    let Some(input) = read_line("  New delimiter (press Enter or type none for empty): ") else {
+        return;
+    };
+    let trimmed = input.trim();
+    if trimmed.eq_ignore_ascii_case("cancel") {
+        println!("  {}", output::muted("Cancelled."));
+        return;
+    }
+    let delimiter = if trimmed == "\"\"" || trimmed.eq_ignore_ascii_case("none") {
+        ""
+    } else {
+        trimmed
+    };
+
+    if !validate::is_valid_delimiter(delimiter) {
+        println!(
+            "  {}",
+            output::caution("Invalid delimiter. It cannot contain / \\ : * ? \" < > | or control characters, and must be at most 32 characters.")
+        );
+        return;
+    }
+
+    match config::save_config(
+        &paths.config,
+        &[("delimiter", Value::String(delimiter.to_string()))],
+    ) {
+        Ok(()) => println!(
+            "  {} Delimiter set to {}.",
+            output::good("Saved."),
+            output::strong(format!("\"{delimiter}\""))
+        ),
+        Err(message) => output::error(message),
+    }
+}
+
 fn menu_option(key: &str, name: &str, value: Option<String>) -> String {
     match value {
         Some(value) => format!("  {}  {:<MENU_WIDTH$}  {value}", output::title(key), name),
@@ -645,6 +692,14 @@ fn run_menu(paths: &Paths) -> i32 {
             "{}",
             menu_option(
                 "5",
+                "Change delimiter",
+                Some(output::strong(format!("\"{}\"", config.delimiter)))
+            )
+        );
+        println!(
+            "{}",
+            menu_option(
+                "6",
                 "Keep original archives",
                 Some(output::on_off(config.keep_zst))
             )
@@ -652,7 +707,7 @@ fn run_menu(paths: &Paths) -> i32 {
         println!(
             "{}",
             menu_option(
-                "6",
+                "7",
                 "Use the Recycle Bin",
                 Some(output::on_off(config.move_to_recycle_bin))
             )
@@ -660,7 +715,7 @@ fn run_menu(paths: &Paths) -> i32 {
         println!("{}", menu_option("0", "Exit", None));
         println!();
 
-        let Some(choice) = read_line("  Select an option [0-6]: ") else {
+        let Some(choice) = read_line("  Select an option [0-7]: ") else {
             println!();
             break;
         };
@@ -686,11 +741,12 @@ fn run_menu(paths: &Paths) -> i32 {
                     );
                 }
             }
-            "5" => menu_toggle_keep_zst(paths),
-            "6" => menu_toggle_recycle_bin(paths),
+            "5" => menu_change_delimiter(paths),
+            "6" => menu_toggle_keep_zst(paths),
+            "7" => menu_toggle_recycle_bin(paths),
             _ => println!(
                 "  {}",
-                output::caution(format!("Unknown option: {choice}. Choose 0-6."))
+                output::caution(format!("Unknown option: {choice}. Choose 0-7."))
             ),
         }
     }
