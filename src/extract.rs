@@ -949,7 +949,11 @@ pub fn run_extract_batch(
 
         let out_name = if total == 1 {
             println!("{}", output::field("Input", input.display()));
-            target.clone()
+            if config.overwrite_single_file_extraction || !csgo.join(target).exists() {
+                target.clone()
+            } else {
+                next_free_name(csgo, stem.clone(), &ext)
+            }
         } else {
             println!(
                 "{}",

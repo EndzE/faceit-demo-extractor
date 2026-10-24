@@ -50,7 +50,7 @@ Demos are saved in your CS2 installation under:
 Counter-Strike Global Offensive\game\csgo
 ```
 
-If a demo with the chosen name already exists, the app automatically picks the next free name, such as `1_1.dem`.
+By default, extracting a single demo writes directly to `1.dem` (replacing any previous demo with that name so `playdemo 1` always loads your latest match). When extracting multiple archives in a batch, existing files are preserved and assigned the next free slots (`1_1.dem`, `1_2.dem`, etc.).
 
 ## Original archives
 
@@ -62,11 +62,16 @@ A failed extraction never removes the archive or replaces an existing demo.
 
 ## Settings
 
-Open `faceit-dem.exe` to change these options:
+Open `faceit-dem.exe` to change interactive options:
 
 - **Change demo filename** - choose the name used for extracted demos, such as `1.dem`
 - **Keep original archives** - keep `.zst` and `.bz2` archives after extraction
 - **Use the Recycle Bin** - move removed archives to the Recycle Bin
+
+Additional options can be configured in `config.json`:
+
+- **overwrite_single_file_extraction** - `true` (default) to overwrite `1.dem` on single-file extraction, or `false` to preserve existing files and pick the next free name (`1_1.dem`, etc.)
+- **csgo_path** - custom path to your CS2 `game\csgo` folder
 
 ## Troubleshooting
 
@@ -92,7 +97,7 @@ Download the demo from FACEIT again. The app checks the archive before writing a
 
 **A demo with that name already exists**
 
-The app picks the next available name automatically. You can also change the base filename in the app settings.
+Extracting a single demo overwrites `1.dem` by default so `playdemo 1` always works without checking file numbers. If you want single-file extractions to pick the next available name instead, set `"overwrite_single_file_extraction": false` in `config.json`. Batch extractions automatically find free names (`1_1.dem`, `1_2.dem`, etc.).
 
 ## Removing the app
 

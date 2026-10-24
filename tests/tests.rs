@@ -208,6 +208,7 @@ fn config_falls_back_on_invalid_values() {
     assert_eq!(config.target_filename, "1.dem");
     assert!(!config.keep_zst);
     assert!(config.move_to_recycle_bin);
+    assert!(config.overwrite_single_file_extraction);
     assert_eq!(config.csgo_path, None);
 }
 
@@ -312,6 +313,10 @@ fn ensure_config_adds_missing_keys_only() {
     assert_eq!(saved["custom"], serde_json::Value::Bool(true));
     assert_eq!(saved["keep_zst"], serde_json::Value::Bool(false));
     assert_eq!(saved["move_to_recycle_bin"], serde_json::Value::Bool(false));
+    assert_eq!(
+        saved["overwrite_single_file_extraction"],
+        serde_json::Value::Bool(true)
+    );
     assert_eq!(saved["csgo_path"], serde_json::Value::Null);
 }
 
@@ -331,6 +336,7 @@ fn ensure_config_resets_invalid_json_and_non_object() {
             "target_filename": "1.dem",
             "keep_zst": false,
             "move_to_recycle_bin": false,
+            "overwrite_single_file_extraction": true,
             "csgo_path": null
         })
     );
@@ -695,6 +701,54 @@ fn batch_mode_writes_first_free_slots() {
     assert!(directory.path().join("1_3.dem").exists());
     assert!(!inputs_dir.join("demo0.zst").exists());
     assert!(!inputs_dir.join("demo1.zst").exists());
+}
+
+#[test]
+fn single_file_extraction_respects_overwrite_setting() {
+    let directory = tempfile::tempdir().unwrap();
+    let csgo = directory.path().join("csgo");
+    fs::create_dir(&csgo).unwrap();
+
+    let input1 = directory.path().join("demo1.zst");
+    let input2 = directory.path().join("demo2.zst");
+    let input3 = directory.path().join("demo3.zst");
+    let payload1 = demo_payload(512);
+    let payload2 = demo_payload(1024);
+    let payload3 = demo_payload(2048);
+    write_archive(&input1, &payload1, true);
+    write_archive(&input2, &payload2, true);
+    write_archive(&input3, &payload3, true);
+
+    let mut config = Config::defaults();
+    config.overwrite_single_file_extraction = false;
+
+    // 1. When 1.dem does not exist, extracts as 1.dem
+    let code = extract::run_extract_batch(&[input1], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert_eq!(fs::read(csgo.join("1.dem")).unwrap(), payload1);
+
+    // 2. When 1.dem exists and overwrite_single_file_extraction is false, saves as 1_1.dem
+    let code = extract::run_extract_batch(&[input2], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert_eq!(fs::read(csgo.join("1.dem")).unwrap(), payload1);
+    assert_eq!(fs::read(csgo.join("1_1.dem")).unwrap(), payload2);
+
+    // 3. When 1.dem and 1_1.dem exist, saves as 1_2.dem
+    let code = extract::run_extract_batch(&[input3], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert_eq!(fs::read(csgo.join("1.dem")).unwrap(), payload1);
+    assert_eq!(fs::read(csgo.join("1_1.dem")).unwrap(), payload2);
+    assert_eq!(fs::read(csgo.join("1_2.dem")).unwrap(), payload3);
+
+    // 4. When overwrite_single_file_extraction is true, overwrites 1.dem
+    let input4 = directory.path().join("demo4.zst");
+    let payload4 = demo_payload(4096);
+    write_archive(&input4, &payload4, true);
+
+    config.overwrite_single_file_extraction = true;
+    let code = extract::run_extract_batch(&[input4], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert_eq!(fs::read(csgo.join("1.dem")).unwrap(), payload4);
 }
 
 #[test]

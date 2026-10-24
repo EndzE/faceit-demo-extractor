@@ -8,7 +8,10 @@ use serde_json::{Map, Value};
 
 use crate::output::{self, warn};
 use crate::validate::is_valid_demo_filename;
-use crate::{DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN, DEFAULT_TARGET_FILENAME};
+use crate::{
+    DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN, DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
+    DEFAULT_TARGET_FILENAME,
+};
 
 static CONFIG_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -17,6 +20,7 @@ pub struct Config {
     pub target_filename: String,
     pub keep_zst: bool,
     pub move_to_recycle_bin: bool,
+    pub overwrite_single_file_extraction: bool,
     pub csgo_path: Option<String>,
 }
 
@@ -26,6 +30,7 @@ impl Config {
             target_filename: DEFAULT_TARGET_FILENAME.to_string(),
             keep_zst: DEFAULT_KEEP_ZST,
             move_to_recycle_bin: DEFAULT_MOVE_TO_RECYCLE_BIN,
+            overwrite_single_file_extraction: DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
             csgo_path: None,
         }
     }
@@ -38,6 +43,10 @@ impl Config {
             ),
             ("keep_zst", Value::Bool(self.keep_zst)),
             ("move_to_recycle_bin", Value::Bool(self.move_to_recycle_bin)),
+            (
+                "overwrite_single_file_extraction",
+                Value::Bool(self.overwrite_single_file_extraction),
+            ),
             (
                 "csgo_path",
                 self.csgo_path
@@ -115,6 +124,11 @@ pub fn load_config(path: &Path) -> Config {
     config.keep_zst = coerce_bool(&data, "keep_zst", DEFAULT_KEEP_ZST);
     config.move_to_recycle_bin =
         coerce_bool(&data, "move_to_recycle_bin", DEFAULT_MOVE_TO_RECYCLE_BIN);
+    config.overwrite_single_file_extraction = coerce_bool(
+        &data,
+        "overwrite_single_file_extraction",
+        DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
+    );
     config.csgo_path = match data.get("csgo_path") {
         Some(Value::String(path)) if !path.trim().is_empty() => {
             Some(path.trim().trim_matches('"').to_string())
