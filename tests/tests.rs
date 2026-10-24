@@ -1398,6 +1398,13 @@ fn recycle_bin_moves_temp_file() {
 }
 
 #[test]
+fn recycle_bin_nonexistent_file_succeeds() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("does-not-exist.txt");
+    assert!(extract::delete_original(&path, true).is_ok());
+}
+
+#[test]
 fn extract_bz2_success_and_deletes_original() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("demo.dem.bz2");

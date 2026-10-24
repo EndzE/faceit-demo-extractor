@@ -42,7 +42,11 @@ pub fn recycle_file(path: &Path) -> Result<(), String> {
 
     let result = unsafe { SHFileOperationW(&mut operation) };
 
-    if result == 0 && !operation.fAnyOperationsAborted.as_bool() {
+    if operation.fAnyOperationsAborted.as_bool() {
+        return Err("operation was cancelled".to_string());
+    }
+
+    if result == 0 {
         return Ok(());
     }
 
