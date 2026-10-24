@@ -1322,6 +1322,8 @@ const REGISTRY_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsContextMenu";
 const REGISTRY_LABEL_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsUpdateLabel";
 const REGISTRY_STATE_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsState";
 const REGISTRY_STATE_COMMAND_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsState\command";
+const REGISTRY_PARTIAL_ZST_KEY: &str = r"Software\FaceitDemoExtractorTestsPartialZst";
+const REGISTRY_PARTIAL_BZ2_KEY: &str = r"Software\FaceitDemoExtractorTestsPartialBz2";
 
 struct RegistryTestKey(&'static str);
 
@@ -1424,6 +1426,41 @@ fn context_menu_state_detects_moved_executable_and_missing_label() {
         registry::context_menu_state_for(test_menus, &paths),
         Some(false)
     );
+}
+
+#[test]
+fn status_lines_shows_partially_uninstalled_extensions() {
+    let _guard_zst = RegistryTestKey(REGISTRY_PARTIAL_ZST_KEY);
+    let _guard_bz2 = RegistryTestKey(REGISTRY_PARTIAL_BZ2_KEY);
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let _ = hkcu.delete_subkey_all(REGISTRY_PARTIAL_ZST_KEY);
+    let _ = hkcu.delete_subkey_all(REGISTRY_PARTIAL_BZ2_KEY);
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+
+    let test_menus = &[
+        registry::ContextMenu {
+            extension: ".zst",
+            key: REGISTRY_PARTIAL_ZST_KEY,
+            command_key: r"Software\FaceitDemoExtractorTestsPartialZst\command",
+        },
+        registry::ContextMenu {
+            extension: ".bz2",
+            key: REGISTRY_PARTIAL_BZ2_KEY,
+            command_key: r"Software\FaceitDemoExtractorTestsPartialBz2\command",
+        },
+    ];
+
+    let expected = registry::build_context_menu_command(&paths);
+    registry::install_context_menu_at(REGISTRY_PARTIAL_ZST_KEY, "Extract .zst", &expected).unwrap();
+
+    let output = faceit_demo_extractor::cli::status_lines_for(&paths, test_menus).join("\n");
+    assert!(output.contains("needs repair"), "{output}");
+    assert!(output.contains("Menu .zst"), "{output}");
+    assert!(output.contains("Extract .zst"), "{output}");
+    assert!(output.contains("Menu .bz2"), "{output}");
+    assert!(output.contains("not installed"), "{output}");
 }
 
 #[test]

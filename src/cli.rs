@@ -221,7 +221,7 @@ fn worker_field(paths: &Paths) -> String {
     }
 }
 
-pub fn status_lines(paths: &Paths) -> Vec<String> {
+pub fn status_lines_for(paths: &Paths, menus: &[registry::ContextMenu]) -> Vec<String> {
     let config = config::load_config(&paths.config);
     let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
 
@@ -264,29 +264,38 @@ pub fn status_lines(paths: &Paths) -> Vec<String> {
     lines.push(output::section("Right-click menu"));
 
     let expected_command = registry::build_context_menu_command(paths);
+    let menu_state = registry::context_menu_state_for(menus, paths);
 
     lines.push(output::field(
         "Status",
-        match registry::context_menu_state(paths) {
+        match menu_state {
             Some(true) => output::good("installed"),
             Some(false) => output::caution("needs repair"),
             None => output::muted("not installed"),
         },
     ));
 
-    for menu in registry::CTX_MENUS {
+    for menu in menus {
         if !menu.installed() {
-            continue;
-        }
-        if let Some(command) = menu.command() {
-            if let Some(label) = menu.label() {
-                lines.push(output::field(&format!("Menu {}", menu.extension), label));
-            } else {
+            if menu_state == Some(false) {
                 lines.push(output::field(
                     &format!("Menu {}", menu.extension),
-                    output::caution("needs repair"),
+                    output::caution("not installed"),
                 ));
             }
+            continue;
+        }
+
+        if let Some(label) = menu.label() {
+            lines.push(output::field(&format!("Menu {}", menu.extension), label));
+        } else {
+            lines.push(output::field(
+                &format!("Menu {}", menu.extension),
+                output::caution("needs repair (missing label)"),
+            ));
+        }
+
+        if let Some(command) = menu.command() {
             if command == expected_command {
                 lines.push(output::field(
                     &format!("Command {}", menu.extension),
@@ -300,8 +309,8 @@ pub fn status_lines(paths: &Paths) -> Vec<String> {
             }
         } else {
             lines.push(output::field(
-                &format!("Menu {}", menu.extension),
-                output::caution("needs repair"),
+                &format!("Command {}", menu.extension),
+                output::caution("needs repair (missing command)"),
             ));
         }
     }
@@ -309,6 +318,10 @@ pub fn status_lines(paths: &Paths) -> Vec<String> {
     lines.push(String::new());
     lines.push(output::rule(output::RULE_WIDTH));
     lines
+}
+
+pub fn status_lines(paths: &Paths) -> Vec<String> {
+    status_lines_for(paths, registry::CTX_MENUS)
 }
 
 fn read_line(prompt: &str) -> Option<String> {
