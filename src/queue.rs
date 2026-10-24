@@ -55,7 +55,7 @@ fn normalize_path(file: &OsStr) -> Option<PathBuf> {
     std::path::absolute(Path::new(&trimmed)).ok()
 }
 
-fn path_key(path: &Path) -> Vec<u16> {
+pub(crate) fn path_key(path: &Path) -> Vec<u16> {
     path.as_os_str()
         .encode_wide()
         .map(|unit| {

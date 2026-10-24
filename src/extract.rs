@@ -567,7 +567,7 @@ fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     }
 
     let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    absolute(left) == absolute(right)
+    crate::queue::path_key(&absolute(left)) == crate::queue::path_key(&absolute(right))
 }
 
 pub fn extract_one(
@@ -1225,6 +1225,16 @@ mod tests {
 
         fs::write(&input, b"BZh").unwrap();
         assert!(check_header(&input).is_none());
+    }
+
+    #[test]
+    fn paths_refer_to_same_file_matches_case_insensitively_in_fallback() {
+        let left = Path::new(r"C:\nonexistent_test_dir_fallback\demo.dem");
+        let right = Path::new(r"c:\NONEXISTENT_TEST_DIR_FALLBACK\DEMO.dem");
+        assert!(paths_refer_to_same_file(left, right));
+
+        let different = Path::new(r"c:\NONEXISTENT_TEST_DIR_FALLBACK\OTHER.dem");
+        assert!(!paths_refer_to_same_file(left, different));
     }
 
     #[test]
