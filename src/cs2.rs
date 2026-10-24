@@ -60,16 +60,16 @@ pub fn read_reg_string(subkey: &str, value_name: &str) -> Option<String> {
 }
 
 fn resolve_csgo_dir(path: &Path) -> PathBuf {
+    let nested = path.join("game").join("csgo");
+    if nested.is_dir() {
+        return nested;
+    }
+
     if path
         .file_name()
         .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("csgo"))
     {
         return path.to_path_buf();
-    }
-
-    let nested = path.join("game").join("csgo");
-    if nested.is_dir() {
-        return nested;
     }
 
     let direct = path.join("csgo");

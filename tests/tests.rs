@@ -245,6 +245,17 @@ fn csgo_path_override_resolves_install_and_csgo_folders() {
 }
 
 #[test]
+fn csgo_path_override_resolves_root_folder_named_csgo() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("csgo");
+    let csgo = root.join("game").join("csgo");
+    fs::create_dir_all(&csgo).unwrap();
+
+    let (found, _) = cs2::find_cs2_csgo_path(Some(root.to_str().unwrap()), directory.path());
+    assert_eq!(found.as_deref(), Some(csgo.as_path()));
+}
+
+#[test]
 fn relative_csgo_path_resolves_against_base_dir() {
     let directory = tempfile::tempdir().unwrap();
     let csgo = directory
