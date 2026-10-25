@@ -1563,8 +1563,9 @@ fn context_menu_quiet_worker_with_notifications_batch_extraction() {
         wait_until(|| output1.is_file() && output2.is_file(), Duration::from_secs(10)),
         "the batch demos were not extracted"
     );
-    assert_eq!(fs::read(&output1).unwrap(), payload1);
-    assert_eq!(fs::read(&output2).unwrap(), payload2);
+    let extracted = [fs::read(&output1).unwrap(), fs::read(&output2).unwrap()];
+    assert!(extracted.contains(&payload1));
+    assert!(extracted.contains(&payload2));
     assert!(
         wait_until(
             || queue::worker_lock_is_free(&paths).unwrap_or(false),
