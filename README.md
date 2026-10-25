@@ -1,120 +1,183 @@
 # FACEIT Demo Extractor
 
-Get your FACEIT demos into CS2 without digging through folders.
+> Seamlessly unpack and verify FACEIT (`.dem.zst`) and Valve (`.dem.bz2`) match demos straight into your Counter-Strike 2 folder. Launch them directly from the in-game developer console with zero manual folder navigation.
 
-FACEIT matches arrive as compressed `.dem.zst` archives, and demos downloaded directly from Valve's demo servers (a `replayNNN.valve.net/730/...` demo link) arrive as compressed `.dem.bz2` archives. This app unpacks both, checks that the download is intact, and places the finished `.dem` file in your CS2 `game\csgo` folder so you can play it right away.
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-blue.svg)](#system-requirements)
+[![Formats](https://img.shields.io/badge/Archives-.dem.zst%20%7C%20.dem.bz2-green.svg)](#features)
+[![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
+[![Interface](https://img.shields.io/badge/Interface-Interactive%20TUI%20%2B%20Context%20Menu-blueviolet.svg)](#how-to-use)
 
-## What you need
+---
 
-- Windows 10 or 11
-- Counter-Strike 2 installed
-- Both app files kept in the same folder:
-  - `faceit-dem.exe` - the app you open
-  - `faceit-dem-quiet.exe` - a small background helper used by the right-click menu
+> [!IMPORTANT]
+> ### Keep Both Executables in the Same Folder
+> **`faceit-dem.exe` and `faceit-dem-quiet.exe` must always reside side-by-side in the same directory.**
+>
+> The right-click context menu calls `faceit-dem-quiet.exe` as a lightweight dispatch helper that batches multiple Explorer selections and forwards them to `faceit-dem.exe` behind the scenes.
 
-## First-time setup
+---
 
-1. Put the app folder somewhere permanent, such as `C:\Tools\FACEIT Demo Extractor`.
-2. Double-click `faceit-dem.exe`.
-3. Check that the app shows the correct **CS2 folder**. If it does, you are ready to go.
-4. Optional but recommended: choose **1 - Install right-click menu**.
+## Features
 
-The right-click menu lets you extract demos directly from Explorer without opening the app first.
+- **Multi-Format Extraction:** Unpacks FACEIT Zstandard archives (`.dem.zst`) and Valve bzip2 archives (`.dem.bz2`, from `replayNNN.valve.net` demo links) seamlessly with automatic format detection.
+- **1-Click Context Menu:** Integrates directly into the Windows Explorer right-click menu for `.dem.zst` and `.dem.bz2` files without opening a terminal.
+- **Native Toast Notifications:** Optional background mode (`notifications_instead_of_console`) runs right-click jobs hidden and alerts you with the exact in-game `playdemo` command upon completion.
+- **Atomic Safety & Checksum Verification:** Pre-validates archive headers, verifies built-in XXH64 / CRC32 checksums during decompression, writes to `.tmp` files first, and safely preserves existing demos if an archive is corrupted.
+- **Batch & Conflict Management:** Automatically queues simultaneous multi-file selections, finds gap numbers (`1_1.dem`, `1_2.dem`), supports custom delimiters (`_`, `-`, or empty `""`), and allows preserving original match filenames (`rename_demo: Off`).
+- **Clean Archive Lifecycle:** Automatically purges processed archives to save disk space, with configurable options to keep originals or move them to the Windows Recycle Bin.
 
-## Extract a demo
+---
 
-### From the right-click menu
+## System Requirements
 
-1. Save or download the demo archive - `.dem.zst` from FACEIT, or `.dem.bz2` from a `replayNNN.valve.net` demo link.
-2. Right-click the archive in Explorer.
-3. Choose **Extract to CS2 folder (1.dem)**.
-4. Wait for the confirmation message.
+| Requirement | Details |
+|---|---|
+| **Operating System** | Windows 10 / 11 (64-bit) |
+| **Game** | Counter-Strike 2 installed via Steam |
+| **Dependencies** | None (100% self-contained native Rust binaries) |
+| **Permissions** | Standard user permissions (writes context menu association to `HKCU`) |
+| **Location** | Both binaries in a permanent folder (e.g. `C:\Tools\FaceitDemoExtractor`) |
 
-### By dragging and dropping
+---
 
-You can also drag one or more archives (`.dem.zst` or `.dem.bz2`) onto `faceit-dem.exe`. The app extracts them in one batch.
+## Installation Guide
 
-## Play the demo in CS2
+### Step 1: Download & Place Binaries
+Download the latest `faceit-demo-extractor-vX.X.zip` from [Releases](https://github.com/EndzE/faceit-demo-extractor/releases) and extract both binaries into a permanent folder.
 
-1. Open CS2.
-2. Open the developer console.
-3. Type `playdemo 1` and press Enter.
+> [!TIP]
+> Place the folder somewhere permanent before installing the context menu (for example, `C:\Tools\FaceitDemoExtractor`). If you ever move the folder later, simply run `faceit-dem.exe` and select **Repair right-click menu** (or run `faceit-dem --install`).
 
-The command matches the demo filename without `.dem`. If the app saved the demo as `1_1.dem`, use `playdemo 1_1`.
+### Step 2: Configure & Register Context Menu
+1. Double-click **`faceit-dem.exe`**.
+2. Verify that your **CS2 folder** path was automatically detected.
+3. Select **`1 - Install right-click menu`** to register the Explorer context menu.
 
-## Where demos go
+---
 
-Demos are saved in your CS2 installation under:
+## How to Use
 
+### 1. From the Windows Right-Click Menu
+1. Download or locate your demo archives (`.dem.zst` or `.dem.bz2`).
+2. Right-click the archive (or select multiple archives and right-click).
+3. Select **Extract to CS2 folder (1.dem)**.
+4. When finished, a confirmation (or native Windows toast notification) will display your extracted demo filename.
+
+### 2. By Drag and Drop
+Drag and drop one or more `.dem.zst` or `.dem.bz2` files directly onto `faceit-dem.exe`. The app will batch-extract all files into your CS2 folder.
+
+### 3. From the Command Line (CLI)
+You can invoke `faceit-dem.exe` from any terminal or PowerShell session:
+
+| Command | Purpose |
+|---|---|
+| `faceit-dem` | Launches the interactive TUI configuration menu |
+| `faceit-dem <archive> [...]` | Extracts one or more `.dem.zst` or `.dem.bz2` archives |
+| `faceit-dem -- <archive> [...]` | Safely handles archive filenames that start with a dash (`-`) |
+| `faceit-dem --status` | Prints current configuration, CS2 path, and context menu status |
+| `faceit-dem --test <archive>` | Verifies archive integrity and checksums without writing any demo files |
+| `faceit-dem --install` | Installs or repairs the Windows Explorer right-click context menu |
+| `faceit-dem --remove` | Unregisters and cleans up the right-click context menu |
+| `faceit-dem --update-label` | Updates the right-click menu label to match current settings |
+| `faceit-dem --help` | Displays command-line usage and available flags |
+
+---
+
+## Playing Demos in CS2
+
+1. Launch **Counter-Strike 2**.
+2. Open the developer console (`~` by default (Should be enabled in: Settings → Game → Enable Developer Console (~) → Yes)).
+3. Type the `playdemo` command matching your demo stem:
+   ```text
+   playdemo 1
+   ```
+   *(If the demo was saved as `1_1.dem`, type `playdemo 1_1`. If names contain spaces, wrap in quotes: `playdemo "my demo"`).*
+
+### Where Demos Go
+Extracted demos are placed directly into your CS2 game directory:
 ```text
-Counter-Strike Global Offensive\game\csgo
+<SteamLibrary>\steamapps\common\Counter-Strike Global Offensive\game\csgo\
+```
+- **Single-file extractions:** Writes directly to `1.dem` by default (replacing any previous `1.dem` so `playdemo 1` always loads your latest match).
+- **Batch extractions:** Automatically scans existing files and writes to sequential gap slots (`1_1.dem`, `1_2.dem`, etc.) to prevent overwriting existing demos.
+
+---
+
+## Settings & Configuration
+
+### Interactive Menu Options
+Run `faceit-dem.exe` without arguments to access the interactive configuration menu:
+
+| Option | Setting | Description |
+|:---:|---|---|
+| **`1`** | **Install / Reinstall / Repair menu** | Registers or repairs Windows Explorer context menu entries in `HKCU`. |
+| **`2`** | **Remove right-click menu** | Unregisters the right-click context menu completely. |
+| **`3`** | **Rename demo** (`On` / `Off`) | When `Off`, preserves original archive filenames (e.g. `match.dem.zst` → `match.dem`). |
+| **`4`** | **Change demo filename** | Sets the default single-extraction target filename (e.g. `1.dem`). |
+| **`5`** | **Change delimiter** | Customizes the separator string before batch numbers (default: `_`). |
+| **`6`** | **Keep original archives** (`On` / `Off`) | Keeps `.zst` / `.bz2` downloads instead of deleting them after successful extraction. |
+| **`7`** | **Use the Recycle Bin** (`On` / `Off`) | Sends deleted archives to the Windows Recycle Bin instead of permanent deletion. |
+| **`8`** | **Notifications instead of console** (`On` / `Off`) | Hides the console on right-click extraction and displays native Windows toast notifications. |
+| **`0`** | **Exit** | Saves settings and exits. |
+
+### Configuration File (`config.json`)
+Settings can also be modified in `config.json` next to `faceit-dem.exe`:
+
+```json
+{
+  "rename_demo": true,
+  "target_filename": "1.dem",
+  "delimiter": "_",
+  "keep_zst": false,
+  "move_to_recycle_bin": false,
+  "overwrite_single_file_extraction": true,
+  "notifications_instead_of_console": false,
+  "csgo_path": null
+}
 ```
 
-By default, extracting a single demo writes directly to `1.dem` (replacing any previous demo with that name so `playdemo 1` always loads your latest match). When extracting multiple archives in a batch, existing files are preserved and assigned the next free slots (`1_1.dem`, `1_2.dem`, etc.).
+| Key | Type | Default | Details |
+|---|:---:|:---:|---|
+| `rename_demo` | `bool` | `true` | `false` keeps original archive names without renaming to `1.dem`. |
+| `target_filename` | `string` | `"1.dem"` | Target filename for renamed demos (must end with `.dem`). |
+| `delimiter` | `string` | `"_"` | Separator string before numbers for batches or duplicates. Can be empty (`""`) to produce `11.dem`. |
+| `keep_zst` | `bool` | `false` | `true` keeps original `.dem.zst` and `.dem.bz2` archives after extraction. |
+| `move_to_recycle_bin` | `bool` | `false` | `true` sends deleted archives to the Recycle Bin instead of permanent deletion. |
+| `overwrite_single_file_extraction` | `bool` | `true` | `true` overwrites `1.dem` on single-file extraction; `false` finds the next free numbered name (`1_1.dem`).*(Advanced setting: edit via config.json only)* |
+| `notifications_instead_of_console` | `bool` | `false` | `true` runs background extractions silently and reports via Windows toast notifications. |
+| `csgo_path` | `string?` | `null` | Custom absolute or relative path to your CS2 `game\csgo` folder. |
 
-## Original archives
-
-By default, the original archive is permanently deleted after a successful extraction.
-
-If you want to keep your downloads, open `faceit-dem.exe` and turn on **Keep original archives**. You can also turn on **Use the Recycle Bin** if you want deleted archives to be recoverable.
-
-A failed extraction never removes the archive or replaces an existing demo.
-
-## Settings
-
-Open `faceit-dem.exe` to change interactive options:
-
-- **Rename demo** - turn demo renaming on or off (`On` / `Off`). When turned off, demos keep their original download names (e.g. `match123.dem`), and "Change demo filename" and "Change delimiter" are disabled
-- **Change demo filename** - choose the name used for extracted demos when renaming is turned on (such as `1.dem`)
-- **Change delimiter** - separator placed before numbers for batches or existing demos (default: `"_"`). Can be changed to anything valid (such as `"-"`), or empty (`""`) to produce names like `11.dem`, `12.dem`
-- **Keep original archives** - keep `.zst` and `.bz2` archives after extraction
-- **Use the Recycle Bin** - move removed archives to the Recycle Bin
-- **Notifications instead of console** - run right-click extractions in the background and show a Windows notification on success or failure
-
-Additional options can be configured in `config.json`:
-
-- **delimiter** - separator string before numbers (default: `"_"`). Set to `""` for no separator
-- **overwrite_single_file_extraction** - `true` (default) to overwrite `1.dem` on single-file extraction, or `false` to preserve existing files and pick the next free name (`1_1.dem`, etc.)
-- **notifications_instead_of_console** - `true` to hide the extraction console and show a Windows notification on success or failure (default: `false`)
-- **csgo_path** - custom path to your CS2 `game\csgo` folder
+---
 
 ## Troubleshooting
 
-**The app cannot find my CS2 folder**
-
-Start CS2 once so the game creates its folders. If your game is installed in a custom location, open `config.json` next to `faceit-dem.exe` and set `csgo_path` to your CS2 `game\csgo` folder. An absolute path is recommended:
-
+### CS2 Folder Not Detected
+Start Counter-Strike 2 at least once so Steam and the game initialize the installation directories and Windows registry entries. If using a non-standard Steam library or custom install folder, open `config.json` next to `faceit-dem.exe` and specify your `csgo_path`:
 ```json
 {
   "csgo_path": "D:\\SteamLibrary\\steamapps\\common\\Counter-Strike Global Offensive\\game\\csgo"
 }
 ```
+*An absolute path is recommended. A relative path resolves relative to the directory containing `faceit-dem.exe`.*
 
-A relative `csgo_path` is resolved from the folder containing `faceit-dem.exe`.
+### Right-Click Option is Missing
+Open `faceit-dem.exe` and choose **Repair right-click menu** (or run `faceit-dem --install`). Verify that `faceit-dem-quiet.exe` is still located in the exact same folder as `faceit-dem.exe`.
 
-**The right-click option is missing**
+### Damaged or Truncated Archives
+If the extractor reports that an archive is invalid or has a mismatched checksum, the download was likely interrupted or corrupted. The extractor checks magic headers and verifies checksums during streaming decompression, refusing to write incomplete or corrupted demos. Re-download the match demo from FACEIT or Valve.
 
-Open `faceit-dem.exe` and choose **Install right-click menu** again. Make sure `faceit-dem-quiet.exe` is still in the same folder.
+### Preserving Existing Demos on Single Extraction
+By default, extracting a single demo intentionally overwrites `1.dem` so that you can always type `playdemo 1` in the CS2 console. If you prefer keeping every match, set `"overwrite_single_file_extraction": false` in `config.json`. The app will allocate sequential numbered slots (`1_1.dem`, `1_2.dem`, etc.) automatically.
 
-**The app says the archive is damaged**
+---
 
-Download the demo from FACEIT again. The app checks the archive before writing anything, so a damaged download is rejected safely.
+## Removal & Cleanup
 
-**A demo with that name already exists**
+1. Double-click `faceit-dem.exe` and select **`2 - Remove right-click menu`** (or run `faceit-dem --remove` from the terminal).
+2. Delete the application folder containing `faceit-dem.exe` and `faceit-dem-quiet.exe`.
 
-Extracting a single demo overwrites `1.dem` by default so `playdemo 1` always works without checking file numbers. If you want single-file extractions to pick the next available name instead, set `"overwrite_single_file_extraction": false` in `config.json`. Batch extractions automatically find free names (`1_1.dem`, `1_2.dem`, etc.).
-
-## Removing the app
-
-Open `faceit-dem.exe` and choose **Remove right-click menu**, then delete the app folder.
-
-## Safety
-
-- Archives are checked for corruption and verified against their checksums when present.
-- Demos are written to a temporary file first.
-- Existing demos are only replaced after the new file passes validation.
-- A failed extraction leaves your archive and existing demos untouched.
+---
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
