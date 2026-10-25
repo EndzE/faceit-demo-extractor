@@ -1447,6 +1447,7 @@ fn status_prints_configuration() {
 }
 
 #[test]
+#[ignore = "spawns console window (e2e)"]
 fn context_menu_quiet_worker_end_to_end() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
@@ -1508,6 +1509,7 @@ fn context_menu_quiet_worker_end_to_end() {
 }
 
 #[test]
+#[ignore = "sends Windows toast notification (e2e)"]
 fn context_menu_quiet_worker_with_notifications_batch_extraction() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
