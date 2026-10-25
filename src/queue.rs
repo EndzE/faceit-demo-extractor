@@ -457,7 +457,10 @@ pub fn format_playdemo_commands(extracted: &[String]) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         if remaining > 3 {
-            format!("{first_three}\nOther: {others}, ... (+{} more)", remaining - 3)
+            format!(
+                "{first_three}\nOther: {others}, ... (+{} more)",
+                remaining - 3
+            )
         } else {
             format!("{first_three}\nOther: {others}")
         }
@@ -867,7 +870,10 @@ mod tests {
         };
         let (title, message) = extraction_notification_content(&batch_ok);
         assert_eq!(title, "Extraction complete (3 demos)");
-        assert_eq!(message, "playdemo \"1\"\nplaydemo \"1_1\"\nplaydemo \"1_2\"");
+        assert_eq!(
+            message,
+            "playdemo \"1\"\nplaydemo \"1_1\"\nplaydemo \"1_2\""
+        );
 
         let partial_fail = ExtractOutcome {
             exit_code: 1,

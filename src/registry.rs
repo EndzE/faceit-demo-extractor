@@ -98,13 +98,11 @@ pub fn context_menu_state_for(menus: &[ContextMenu], paths: &Paths) -> Option<bo
         return None;
     }
     let expected_command = build_context_menu_command(paths);
-    Some(
-        menus.iter().all(|menu| {
-            menu.installed()
-                && menu.label().is_some()
-                && menu.command().as_deref() == Some(&expected_command)
-        }),
-    )
+    Some(menus.iter().all(|menu| {
+        menu.installed()
+            && menu.label().is_some()
+            && menu.command().as_deref() == Some(&expected_command)
+    }))
 }
 
 /// Overall right-click state: `None` when no menu is installed, `Some(true)`

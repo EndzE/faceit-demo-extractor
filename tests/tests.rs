@@ -1562,7 +1562,10 @@ fn context_menu_quiet_worker_with_notifications_batch_extraction() {
     let output1 = csgo.join("1_1.dem");
     let output2 = csgo.join("1_2.dem");
     assert!(
-        wait_until(|| output1.is_file() && output2.is_file(), Duration::from_secs(10)),
+        wait_until(
+            || output1.is_file() && output2.is_file(),
+            Duration::from_secs(10)
+        ),
         "the batch demos were not extracted"
     );
     let extracted = [fs::read(&output1).unwrap(), fs::read(&output2).unwrap()];
