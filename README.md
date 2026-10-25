@@ -60,6 +60,7 @@ Download the latest `faceit-demo-extractor-vX.X.zip` from [Releases](https://git
 ### 1. From the Windows Right-Click Menu
 1. Download or locate your demo archives (`.dem.zst` or `.dem.bz2`).
 2. Right-click the archive (or select multiple archives and right-click).
+   * *Windows 11 note: Hold **`Shift` + Right-click** (or select **Show more options**) to view the classic context menu.*
 3. Select **Extract to CS2 folder (1.dem)**.
 4. When finished, a confirmation (or native Windows toast notification) will display your extracted demo filename.
 
@@ -86,7 +87,7 @@ You can invoke `faceit-dem.exe` from any terminal or PowerShell session:
 ## Playing Demos in CS2
 
 1. Launch **Counter-Strike 2**.
-2. Open the developer console (`~` by default (Should be enabled in: Settings → Game → Enable Developer Console (~) → Yes)).
+2. Open the developer console (`~` by default; enable via **Settings → Game → Enable Developer Console (~) → Yes**).
 3. Type the `playdemo` command matching your demo stem:
    ```text
    playdemo 1
@@ -101,8 +102,8 @@ Extracted demos are placed directly into your CS2 game directory:
 
 > [!WARNING]
 > **Single-file extractions:** Writes directly to `1.dem` by default (replacing any previous `1.dem` so `playdemo 1` always loads your latest match).
-
-- **Batch extractions:** Automatically scans existing files and writes to sequential gap slots (`1_1.dem`, `1_2.dem`, etc.) to prevent overwriting existing demos.
+>
+> **Batch extractions:** Automatically scans existing files and writes to sequential gap slots (`1_1.dem`, `1_2.dem`, etc.) to prevent overwriting existing demos.
 
 ---
 
@@ -146,7 +147,7 @@ Settings can also be modified in `config.json` next to `faceit-dem.exe`:
 | `delimiter` | `string` | `"_"` | Separator string before numbers for batches or duplicates. Can be empty (`""`) to produce `11.dem`. |
 | `keep_zst` | `bool` | `false` | `true` keeps original `.dem.zst` and `.dem.bz2` archives after extraction. |
 | `move_to_recycle_bin` | `bool` | `false` | `true` sends deleted archives to the Recycle Bin instead of permanent deletion. |
-| `overwrite_single_file_extraction` | `bool` | `true` | `true` overwrites `1.dem` on single-file extraction; `false` finds the next free numbered name (`1_1.dem`) *Can be edited via config.json only* |
+| `overwrite_single_file_extraction` | `bool` | `true` | `true` overwrites `1.dem` on single-file extraction; `false` finds the next free numbered name (`1_1.dem`). *(Editable via `config.json` only)* |
 | `notifications_instead_of_console` | `bool` | `false` | `true` runs background extractions silently and reports via Windows toast notifications. |
 | `csgo_path` | `string?` | `null` | Custom absolute or relative path to your CS2 `game\csgo` folder. |
 
