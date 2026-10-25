@@ -893,9 +893,22 @@ pub fn next_free_name(folder: &Path, stem: String, ext: &str, delimiter: &str) -
     next_free_name_with_attempts(folder, &stem, ext, delimiter, 10_000)
 }
 
-pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> i32 {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractOutcome {
+    pub exit_code: i32,
+    pub extracted: Vec<String>,
+    pub failed: usize,
+    pub total: usize,
+}
+
+pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> ExtractOutcome {
     if files.is_empty() {
-        return 0;
+        return ExtractOutcome {
+            exit_code: 0,
+            extracted: Vec::new(),
+            failed: 0,
+            total: 0,
+        };
     }
 
     let config = config::load_config(&paths.config);
@@ -927,10 +940,15 @@ pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> 
             println!();
             output::pause("Press Enter to close...");
         }
-        return 1;
+        return ExtractOutcome {
+            exit_code: 1,
+            extracted: Vec::new(),
+            failed: files.len(),
+            total: files.len(),
+        };
     };
 
-    run_extract_batch(files, &csgo, &source, &config, pause_after)
+    run_extract_batch_outcome(files, &csgo, &source, &config, pause_after)
 }
 
 pub fn run_extract_batch(
@@ -940,6 +958,16 @@ pub fn run_extract_batch(
     config: &Config,
     pause_after: bool,
 ) -> i32 {
+    run_extract_batch_outcome(files, csgo, source, config, pause_after).exit_code
+}
+
+pub fn run_extract_batch_outcome(
+    files: &[PathBuf],
+    csgo: &Path,
+    source: &str,
+    config: &Config,
+    pause_after: bool,
+) -> ExtractOutcome {
     let target = &config.target_filename;
     let keep_zst = config.keep_zst;
     let move_to_recycle_bin = config.move_to_recycle_bin;
@@ -971,7 +999,12 @@ pub fn run_extract_batch(
     for (index, input) in files.iter().enumerate() {
         if CANCEL.load(Ordering::SeqCst) {
             output::cancelled();
-            return 130;
+            return ExtractOutcome {
+                exit_code: 130,
+                extracted,
+                failed: failed.len(),
+                total,
+            };
         }
 
         let out_name = if !config.rename_demo {
@@ -1017,7 +1050,12 @@ pub fn run_extract_batch(
             ExtractResult::Failed => failed.push(input),
             ExtractResult::Cancelled => {
                 output::cancelled();
-                return 130;
+                return ExtractOutcome {
+                    exit_code: 130,
+                    extracted,
+                    failed: failed.len(),
+                    total,
+                };
             }
         }
 
@@ -1085,7 +1123,12 @@ pub fn run_extract_batch(
         output::pause("Press Enter to close...");
     }
 
-    if failed.is_empty() { 0 } else { 1 }
+    ExtractOutcome {
+        exit_code: if failed.is_empty() { 0 } else { 1 },
+        extracted,
+        failed: failed.len(),
+        total,
+    }
 }
 
 #[cfg(test)]

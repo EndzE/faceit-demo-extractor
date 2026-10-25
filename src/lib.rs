@@ -21,6 +21,7 @@ pub const DEFAULT_KEEP_ZST: bool = false;
 pub const DEFAULT_MOVE_TO_RECYCLE_BIN: bool = false;
 pub const DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION: bool = true;
 pub const DEFAULT_RENAME_DEMO: bool = true;
+pub const DEFAULT_NOTIFICATIONS_INSTEAD_OF_CONSOLE: bool = false;
 
 pub const DEMO_MAGIC: &[u8] = b"PBDEMS2\x00";
 pub const MAX_FILENAME_LEN: usize = 255;
@@ -104,11 +105,19 @@ pub fn run_console() -> i32 {
     match std::panic::catch_unwind(cli::run) {
         Ok(code) => code,
         Err(payload) => {
-            output::error(format!(
+            let message = format!(
                 "unexpected internal error: {}",
                 panic_message(payload.as_ref())
-            ));
-            output::pause("Press Enter to close...");
+            );
+            output::error(&message);
+
+            let notifications = WORKER_MODE.load(Ordering::SeqCst)
+                && config::load_config(&Paths::discover().config).notifications_instead_of_console;
+            if notifications {
+                let _ = win32::notify("Extraction failed", &message);
+            } else {
+                output::pause("Press Enter to close...");
+            }
             1
         }
     }

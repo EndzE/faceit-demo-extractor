@@ -167,7 +167,9 @@ pub fn usage() -> String {
         String::new(),
         format!(
             "  {}",
-            output::muted("Extract FACEIT .dem.zst or .dem.bz2 demos straight into your CS2 folder.")
+            output::muted(
+                "Extract FACEIT .dem.zst or .dem.bz2 demos straight into your CS2 folder."
+            )
         ),
         String::new(),
         output::section("Usage"),
@@ -223,7 +225,7 @@ pub fn usage() -> String {
             output::muted("File")
         ),
         format!(
-            "  {}  rename_demo, target_filename, delimiter, keep_zst, move_to_recycle_bin, overwrite_single_file_extraction, csgo_path",
+            "  {}  rename_demo, target_filename, delimiter, keep_zst, move_to_recycle_bin, overwrite_single_file_extraction, notifications_instead_of_console, csgo_path",
             output::muted("Keys")
         ),
         String::new(),
@@ -291,6 +293,10 @@ pub fn status_lines_for(paths: &Paths, menus: &[registry::ContextMenu]) -> Vec<S
     lines.push(output::field(
         "Overwrite single",
         output::on_off(config.overwrite_single_file_extraction),
+    ));
+    lines.push(output::field(
+        "Notifications",
+        output::on_off(config.notifications_instead_of_console),
     ));
 
     lines.push(String::new());
@@ -471,10 +477,7 @@ fn menu_toggle_keep_zst(paths: &Paths) {
     match config::save_config(&paths.config, &[("keep_zst", Value::Bool(keep))]) {
         Ok(()) => {
             if keep {
-                println!(
-                    "  {} Original archives will be kept.",
-                    output::good("On.")
-                );
+                println!("  {} Original archives will be kept.", output::good("On."));
             } else {
                 println!(
                     "  {} Original archives will be removed after extraction.",
@@ -546,11 +549,40 @@ fn menu_toggle_rename_demo(paths: &Paths) {
     }
 }
 
+fn menu_toggle_notifications(paths: &Paths) {
+    let notifications = !config::load_config(&paths.config).notifications_instead_of_console;
+
+    match config::save_config(
+        &paths.config,
+        &[(
+            "notifications_instead_of_console",
+            Value::Bool(notifications),
+        )],
+    ) {
+        Ok(()) => {
+            if notifications {
+                println!(
+                    "  {} Right-click extractions will run hidden and report with a notification.",
+                    output::good("On.")
+                );
+            } else {
+                println!(
+                    "  {} Right-click extractions will open a console window.",
+                    output::caution("Off.")
+                );
+            }
+        }
+        Err(message) => output::error(message),
+    }
+}
+
 fn menu_change_delimiter(paths: &Paths) {
     println!("{}", output::section("Change numbering delimiter"));
     println!(
         "  {}",
-        output::muted("Separator used before numbers for batches or existing files (e.g. _ for 1_1.dem, - for 1-1.dem, empty for 11.dem).")
+        output::muted(
+            "Separator used before numbers for batches or existing files (e.g. _ for 1_1.dem, - for 1-1.dem, empty for 11.dem)."
+        )
     );
     println!();
 
@@ -571,7 +603,9 @@ fn menu_change_delimiter(paths: &Paths) {
     if !validate::is_valid_delimiter(delimiter) {
         println!(
             "  {}",
-            output::caution("Invalid delimiter. It cannot contain / \\ : * ? \" < > | or control characters, and must be at most 32 characters.")
+            output::caution(
+                "Invalid delimiter. It cannot contain / \\ : * ? \" < > | or control characters, and must be at most 32 characters."
+            )
         );
         return;
     }
@@ -663,11 +697,7 @@ fn run_menu(paths: &Paths) -> i32 {
         println!("{}", menu_option("2", "Remove right-click menu", None));
         println!(
             "{}",
-            menu_option(
-                "3",
-                "Rename demo",
-                Some(output::on_off(config.rename_demo))
-            )
+            menu_option("3", "Rename demo", Some(output::on_off(config.rename_demo)))
         );
         if config.rename_demo {
             println!(
@@ -681,11 +711,7 @@ fn run_menu(paths: &Paths) -> i32 {
         } else {
             println!(
                 "{}",
-                menu_option_disabled(
-                    "4",
-                    "Change demo filename",
-                    Some(&config.target_filename)
-                )
+                menu_option_disabled("4", "Change demo filename", Some(&config.target_filename))
             );
         }
         let delimiter_display = format!("\"{}\"", config.delimiter);
@@ -701,11 +727,7 @@ fn run_menu(paths: &Paths) -> i32 {
         } else {
             println!(
                 "{}",
-                menu_option_disabled(
-                    "5",
-                    "Change delimiter",
-                    Some(&delimiter_display)
-                )
+                menu_option_disabled("5", "Change delimiter", Some(&delimiter_display))
             );
         }
         println!(
@@ -724,10 +746,18 @@ fn run_menu(paths: &Paths) -> i32 {
                 Some(output::on_off(config.move_to_recycle_bin))
             )
         );
+        println!(
+            "{}",
+            menu_option(
+                "8",
+                "Notifications instead of console",
+                Some(output::on_off(config.notifications_instead_of_console))
+            )
+        );
         println!("{}", menu_option("0", "Exit", None));
         println!();
 
-        let Some(choice) = read_line("  Select an option [0-7]: ") else {
+        let Some(choice) = read_line("  Select an option [0-8]: ") else {
             println!();
             break;
         };
@@ -749,7 +779,9 @@ fn run_menu(paths: &Paths) -> i32 {
                 } else {
                     println!(
                         "  {}",
-                        output::caution("Change demo filename is disabled while Rename demo is off.")
+                        output::caution(
+                            "Change demo filename is disabled while Rename demo is off."
+                        )
                     );
                 }
             }
@@ -765,9 +797,10 @@ fn run_menu(paths: &Paths) -> i32 {
             }
             "6" => menu_toggle_keep_zst(paths),
             "7" => menu_toggle_recycle_bin(paths),
+            "8" => menu_toggle_notifications(paths),
             _ => println!(
                 "  {}",
-                output::caution(format!("Unknown option: {choice}. Choose 0-7."))
+                output::caution(format!("Unknown option: {choice}. Choose 0-8."))
             ),
         }
     }
@@ -823,7 +856,7 @@ fn run_registry_action(flag: &str, paths: &Paths) -> i32 {
 fn run_extract(paths: &Paths, args: &[OsString]) -> i32 {
     let files: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
     println!("{}", output::banner());
-    extract::run_extract_mode(paths, &files, true)
+    extract::run_extract_mode(paths, &files, true).exit_code
 }
 
 fn run_context_menu(paths: &Paths, files: &[OsString]) -> i32 {

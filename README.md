@@ -69,11 +69,13 @@ Open `faceit-dem.exe` to change interactive options:
 - **Change delimiter** - separator placed before numbers for batches or existing demos (default: `"_"`). Can be changed to anything valid (such as `"-"`), or empty (`""`) to produce names like `11.dem`, `12.dem`
 - **Keep original archives** - keep `.zst` and `.bz2` archives after extraction
 - **Use the Recycle Bin** - move removed archives to the Recycle Bin
+- **Notifications instead of console** - run right-click extractions in the background and show a Windows notification on success or failure
 
 Additional options can be configured in `config.json`:
 
 - **delimiter** - separator string before numbers (default: `"_"`). Set to `""` for no separator
 - **overwrite_single_file_extraction** - `true` (default) to overwrite `1.dem` on single-file extraction, or `false` to preserve existing files and pick the next free name (`1_1.dem`, etc.)
+- **notifications_instead_of_console** - `true` to hide the extraction console and show a Windows notification on success or failure (default: `false`)
 - **csgo_path** - custom path to your CS2 `game\csgo` folder
 
 ## Troubleshooting

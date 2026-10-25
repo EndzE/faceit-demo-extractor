@@ -9,7 +9,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::output;
-use crate::{CANCEL, Paths, WORKER_MODE, extract};
+use crate::{CANCEL, Paths, WORKER_MODE, config, extract};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const IDLE_WINDOW: Duration = Duration::from_millis(700);
@@ -418,7 +418,109 @@ pub fn spawn_worker(paths: &Paths) -> Result<(), String> {
         ));
     }
 
-    crate::win32::spawn_new_console(&exe, &["--queue-worker"])
+    if config::load_config(&paths.config).notifications_instead_of_console {
+        crate::win32::spawn_hidden_console(&exe, &["--queue-worker"])
+    } else {
+        crate::win32::spawn_new_console(&exe, &["--queue-worker"])
+    }
+}
+
+fn notify_worker_error(message: &str) {
+    let _ = crate::win32::notify("Extraction failed", message);
+}
+
+pub fn format_playdemo_commands(extracted: &[String]) -> String {
+    let stems: Vec<String> = extracted
+        .iter()
+        .map(|name| extract::split_ext(name).0)
+        .collect();
+
+    if stems.len() <= 4 {
+        stems
+            .iter()
+            .map(|stem| format!("playdemo \"{stem}\""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        let first_three = stems
+            .iter()
+            .take(3)
+            .map(|stem| format!("playdemo \"{stem}\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let remaining = stems.len() - 3;
+        let others = stems
+            .iter()
+            .skip(3)
+            .take(3)
+            .map(|stem| format!("\"{stem}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if remaining > 3 {
+            format!("{first_three}\nOther: {others}, ... (+{} more)", remaining - 3)
+        } else {
+            format!("{first_three}\nOther: {others}")
+        }
+    }
+}
+
+pub fn extraction_notification_content(outcome: &extract::ExtractOutcome) -> (String, String) {
+    if outcome.exit_code == 130 {
+        return (
+            "Extraction cancelled".to_string(),
+            if outcome.extracted.is_empty() {
+                "The extraction was cancelled.".to_string()
+            } else {
+                format!(
+                    "The extraction was cancelled.\n\nExtracted before cancelling:\n{}",
+                    format_playdemo_commands(&outcome.extracted)
+                )
+            },
+        );
+    }
+
+    if outcome.extracted.is_empty() {
+        return (
+            "Extraction failed".to_string(),
+            if outcome.total == 1 {
+                "The archive could not be extracted. It may be damaged or the CS2 folder is unavailable."
+                    .to_string()
+            } else {
+                format!("None of the {} archives could be extracted.", outcome.total)
+            },
+        );
+    }
+
+    let commands = format_playdemo_commands(&outcome.extracted);
+
+    if outcome.failed > 0 {
+        let title = format!(
+            "Extraction complete with errors ({}/{} demos)",
+            outcome.extracted.len(),
+            outcome.total
+        );
+        let plural = if outcome.failed == 1 { "" } else { "s" };
+        let message = format!("{commands}\n\n({} archive{plural} failed)", outcome.failed);
+        (title, message)
+    } else if outcome.total == 1 {
+        ("Extraction complete".to_string(), commands)
+    } else {
+        (
+            format!("Extraction complete ({} demos)", outcome.extracted.len()),
+            commands,
+        )
+    }
+}
+
+fn notify_extraction_result(outcome: &extract::ExtractOutcome) {
+    let (title, message) = extraction_notification_content(outcome);
+    let _ = crate::win32::notify(&title, &message);
+}
+
+fn pause_worker(notifications: bool) {
+    if !notifications {
+        output::pause("Press Enter to close...");
+    }
 }
 
 fn failure_result(failures: Option<String>) -> Result<(), ContextMenuError> {
@@ -506,11 +608,15 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
 
 pub fn run_worker(paths: &Paths) -> i32 {
     let worker_mode = WorkerModeGuard::new();
+    let notifications = config::load_config(&paths.config).notifications_instead_of_console;
 
     if let Err(err) = ensure_queue_dir(paths) {
         output::error(format!("could not create the queue directory: {err}"));
+        if notifications {
+            notify_worker_error(&format!("Could not prepare the extraction queue: {err}"));
+        }
         drop(worker_mode);
-        output::pause("Press Enter to close...");
+        pause_worker(notifications);
         return 1;
     }
 
@@ -519,8 +625,11 @@ pub fn run_worker(paths: &Paths) -> i32 {
         Ok(None) => return 0,
         Err(err) => {
             output::error(format!("could not open the worker lock: {err}"));
+            if notifications {
+                notify_worker_error(&format!("Could not start the extraction worker: {err}"));
+            }
             drop(worker_mode);
-            output::pause("Press Enter to close...");
+            pause_worker(notifications);
             return 1;
         }
     };
@@ -557,8 +666,13 @@ pub fn run_worker(paths: &Paths) -> i32 {
                     }
                     Err(err) => {
                         output::error(format!("could not open the worker lock: {err}"));
+                        if notifications {
+                            notify_worker_error(&format!(
+                                "Could not continue processing the queue: {err}"
+                            ));
+                        }
                         cleanup_own_worker_pid(paths);
-                        output::pause("Press Enter to close...");
+                        pause_worker(notifications);
                         return 1;
                     }
                 }
@@ -569,14 +683,18 @@ pub fn run_worker(paths: &Paths) -> i32 {
         }
 
         processed_any = true;
-        let code = extract::run_extract_mode(paths, &files, false);
+        let outcome = extract::run_extract_mode(paths, &files, false);
 
-        if code == 130 {
+        if notifications {
+            notify_extraction_result(&outcome);
+        }
+
+        if outcome.exit_code == 130 {
             discard_queued_files(paths);
             cleanup_own_worker_pid(paths);
             return 130;
         }
-        if code != 0 {
+        if outcome.exit_code != 0 {
             any_failed = true;
         }
     }
@@ -586,7 +704,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
     }
 
     drop(worker_mode);
-    output::pause("Press Enter to close...");
+    pause_worker(notifications);
 
     if any_failed { 1 } else { 0 }
 }
@@ -673,5 +791,125 @@ mod tests {
         drop(probe);
 
         assert!(worker.join().unwrap().is_some());
+    }
+
+    #[test]
+    fn format_playdemo_commands_formats_single_and_batch() {
+        let single = vec!["1.dem".to_string()];
+        assert_eq!(format_playdemo_commands(&single), "playdemo \"1\"");
+
+        let two = vec!["1.dem".to_string(), "1_1.dem".to_string()];
+        assert_eq!(
+            format_playdemo_commands(&two),
+            "playdemo \"1\"\nplaydemo \"1_1\""
+        );
+
+        let three = vec![
+            "1.dem".to_string(),
+            "1_1.dem".to_string(),
+            "1_2.dem".to_string(),
+        ];
+        assert_eq!(
+            format_playdemo_commands(&three),
+            "playdemo \"1\"\nplaydemo \"1_1\"\nplaydemo \"1_2\""
+        );
+
+        let five = vec![
+            "1.dem".to_string(),
+            "1_1.dem".to_string(),
+            "1_2.dem".to_string(),
+            "1_3.dem".to_string(),
+            "1_4.dem".to_string(),
+        ];
+        assert_eq!(
+            format_playdemo_commands(&five),
+            "playdemo \"1\"\nplaydemo \"1_1\"\nplaydemo \"1_2\"\nOther: \"1_3\", \"1_4\""
+        );
+
+        let seven = vec![
+            "1.dem".to_string(),
+            "1_1.dem".to_string(),
+            "1_2.dem".to_string(),
+            "1_3.dem".to_string(),
+            "1_4.dem".to_string(),
+            "1_5.dem".to_string(),
+            "1_6.dem".to_string(),
+        ];
+        assert_eq!(
+            format_playdemo_commands(&seven),
+            "playdemo \"1\"\nplaydemo \"1_1\"\nplaydemo \"1_2\"\nOther: \"1_3\", \"1_4\", \"1_5\", ... (+1 more)"
+        );
+    }
+
+    #[test]
+    fn extraction_notification_content_formats_various_outcomes() {
+        use crate::extract::ExtractOutcome;
+
+        let single_ok = ExtractOutcome {
+            exit_code: 0,
+            extracted: vec!["1.dem".to_string()],
+            failed: 0,
+            total: 1,
+        };
+        let (title, message) = extraction_notification_content(&single_ok);
+        assert_eq!(title, "Extraction complete");
+        assert_eq!(message, "playdemo \"1\"");
+
+        let batch_ok = ExtractOutcome {
+            exit_code: 0,
+            extracted: vec![
+                "1.dem".to_string(),
+                "1_1.dem".to_string(),
+                "1_2.dem".to_string(),
+            ],
+            failed: 0,
+            total: 3,
+        };
+        let (title, message) = extraction_notification_content(&batch_ok);
+        assert_eq!(title, "Extraction complete (3 demos)");
+        assert_eq!(message, "playdemo \"1\"\nplaydemo \"1_1\"\nplaydemo \"1_2\"");
+
+        let partial_fail = ExtractOutcome {
+            exit_code: 1,
+            extracted: vec!["1.dem".to_string(), "1_1.dem".to_string()],
+            failed: 1,
+            total: 3,
+        };
+        let (title, message) = extraction_notification_content(&partial_fail);
+        assert_eq!(title, "Extraction complete with errors (2/3 demos)");
+        assert_eq!(
+            message,
+            "playdemo \"1\"\nplaydemo \"1_1\"\n\n(1 archive failed)"
+        );
+
+        let all_failed_single = ExtractOutcome {
+            exit_code: 1,
+            extracted: vec![],
+            failed: 1,
+            total: 1,
+        };
+        let (title, message) = extraction_notification_content(&all_failed_single);
+        assert_eq!(title, "Extraction failed");
+        assert!(message.contains("archive could not be extracted"));
+
+        let all_failed_batch = ExtractOutcome {
+            exit_code: 1,
+            extracted: vec![],
+            failed: 3,
+            total: 3,
+        };
+        let (title, message) = extraction_notification_content(&all_failed_batch);
+        assert_eq!(title, "Extraction failed");
+        assert_eq!(message, "None of the 3 archives could be extracted.");
+
+        let cancelled = ExtractOutcome {
+            exit_code: 130,
+            extracted: vec!["1.dem".to_string()],
+            failed: 0,
+            total: 2,
+        };
+        let (title, message) = extraction_notification_content(&cancelled);
+        assert_eq!(title, "Extraction cancelled");
+        assert!(message.contains("playdemo \"1\""));
     }
 }

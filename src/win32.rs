@@ -1,25 +1,33 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::OnceLock;
 
+use windows::Data::Xml::Dom::XmlDocument;
+use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::Console::{
     CONSOLE_SCREEN_BUFFER_INFO, COORD, FillConsoleOutputAttribute, FillConsoleOutputCharacterW,
     GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE, SetConsoleCursorPosition,
 };
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Threading::{
-    CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
+    CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOW,
 };
 use windows::Win32::UI::Shell::{FO_DELETE, SHFILEOPSTRUCTW, SHFileOperationW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE, MessageBoxW,
+    MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE, MessageBoxW, SW_HIDE,
 };
-use windows::core::{BOOL, PCWSTR, PWSTR};
+use windows::core::{BOOL, HSTRING, PCWSTR, PWSTR};
 
 const FOF_WANTNUKEWARNING: u16 = 0x4000;
 const FOF_FLAGS: u16 = 0x0004 | 0x0010 | 0x0040 | 0x0400 | FOF_WANTNUKEWARNING;
+
+const APP_AUMID: &str = "FaceitDemoExtractor";
+const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
+static APP_AUMID_REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 
 pub fn recycle_file(path: &Path) -> Result<(), String> {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -138,6 +146,14 @@ fn push_quoted(target: &mut Vec<u16>, value: &OsStr) {
 }
 
 pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), String> {
+    spawn_console(exe, args, false)
+}
+
+pub fn spawn_hidden_console(exe: &Path, args: &[&str]) -> Result<(), String> {
+    spawn_console(exe, args, true)
+}
+
+fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), String> {
     let application: Vec<u16> = exe
         .as_os_str()
         .encode_wide()
@@ -152,10 +168,14 @@ pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), String> {
     }
     command_line.push(0);
 
-    let startup = STARTUPINFOW {
+    let mut startup = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
         ..Default::default()
     };
+    if hidden {
+        startup.dwFlags = STARTF_USESHOWWINDOW;
+        startup.wShowWindow = SW_HIDE.0 as u16;
+    }
     let mut process = PROCESS_INFORMATION::default();
 
     unsafe {
@@ -178,6 +198,62 @@ pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn register_app_aumid() -> Result<(), String> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
+
+    let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey(APP_AUMID_KEY)
+        .map_err(|err| format!("could not register the notification app id: {err}"))?;
+    key.set_value("DisplayName", &crate::APP_NAME)
+        .map_err(|err| format!("could not set the notification app name: {err}"))
+}
+
+fn ensure_app_aumid() -> Result<(), String> {
+    APP_AUMID_REGISTERED.get_or_init(register_app_aumid).clone()
+}
+
+fn create_toast_document(title: &str, message: &str) -> windows::core::Result<XmlDocument> {
+    let document = XmlDocument::new()?;
+    let toast = document.CreateElement(&HSTRING::from("toast"))?;
+    let visual = document.CreateElement(&HSTRING::from("visual"))?;
+    let binding = document.CreateElement(&HSTRING::from("binding"))?;
+    binding.SetAttribute(&HSTRING::from("template"), &HSTRING::from("ToastGeneric"))?;
+
+    for text in [title, message] {
+        let node = document.CreateElement(&HSTRING::from("text"))?;
+        node.SetInnerText(&HSTRING::from(text))?;
+        binding.AppendChild(&node)?;
+    }
+
+    visual.AppendChild(&binding)?;
+    toast.AppendChild(&visual)?;
+    document.AppendChild(&toast)?;
+    Ok(document)
+}
+
+pub fn notify(title: &str, message: &str) -> Result<(), String> {
+    ensure_app_aumid()?;
+
+    let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+
+    let result = (|| -> windows::core::Result<()> {
+        let document = create_toast_document(title, message)?;
+        let toast = ToastNotification::CreateToastNotification(&document)?;
+        let notifier =
+            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_AUMID))?;
+        notifier.Show(&toast)?;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        Ok(())
+    })();
+
+    if initialized {
+        unsafe { CoUninitialize() };
+    }
+
+    result.map_err(|err| err.to_string())
 }
 
 fn show_message_box(title: &str, text: &str, icon: MESSAGEBOX_STYLE) {

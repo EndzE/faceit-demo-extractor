@@ -200,7 +200,7 @@ fn config_falls_back_on_invalid_values() {
     let path = directory.path().join("config.json");
     fs::write(
         &path,
-        r#"{"target_filename": 7, "delimiter": "*invalid*", "keep_zst": "yes", "move_to_recycle_bin": true, "csgo_path": 7}"#,
+        r#"{"target_filename": 7, "delimiter": "*invalid*", "keep_zst": "yes", "move_to_recycle_bin": true, "notifications_instead_of_console": "yes", "csgo_path": 7}"#,
     )
     .unwrap();
 
@@ -211,6 +211,7 @@ fn config_falls_back_on_invalid_values() {
     assert!(config.move_to_recycle_bin);
     assert!(config.overwrite_single_file_extraction);
     assert!(config.rename_demo);
+    assert!(!config.notifications_instead_of_console);
     assert_eq!(config.csgo_path, None);
 }
 
@@ -324,6 +325,10 @@ fn ensure_config_adds_missing_keys_only() {
         serde_json::Value::Bool(true)
     );
     assert_eq!(saved["rename_demo"], serde_json::Value::Bool(true));
+    assert_eq!(
+        saved["notifications_instead_of_console"],
+        serde_json::Value::Bool(false)
+    );
     assert_eq!(saved["csgo_path"], serde_json::Value::Null);
 }
 
@@ -346,6 +351,7 @@ fn ensure_config_resets_invalid_json_and_non_object() {
             "keep_zst": false,
             "move_to_recycle_bin": false,
             "overwrite_single_file_extraction": true,
+            "notifications_instead_of_console": false,
             "csgo_path": null
         })
     );
@@ -415,8 +421,9 @@ fn csgo_path_override_drives_extraction() {
     let payload = demo_payload(4096);
     write_archive(&input, &payload, true);
 
-    let code = extract::run_extract_mode(&paths, std::slice::from_ref(&input), false);
-    assert_eq!(code, 0);
+    let outcome = extract::run_extract_mode(&paths, std::slice::from_ref(&input), false);
+    assert_eq!(outcome.exit_code, 0);
+    assert_eq!(outcome.extracted, vec!["1.dem"]);
     assert_eq!(fs::read(csgo.join("1.dem")).unwrap(), payload);
     assert!(input.exists());
 }
@@ -808,7 +815,10 @@ fn extraction_preserves_original_names_when_rename_demo_is_false() {
     let code = extract::run_extract_batch(&[input1_dup], &csgo, "test", &config, false);
     assert_eq!(code, 0);
     assert_eq!(fs::read(csgo.join("match_alpha.dem")).unwrap(), payload1);
-    assert_eq!(fs::read(csgo.join("match_alpha_1.dem")).unwrap(), payload1_new);
+    assert_eq!(
+        fs::read(csgo.join("match_alpha_1.dem")).unwrap(),
+        payload1_new
+    );
 }
 
 #[test]
@@ -1212,9 +1222,7 @@ fn worker_breaks_cleanly_when_handoff_lock_is_lost() {
     queue::enqueue_paths(&paths, &[input.into_os_string()]).unwrap();
 
     let worker_paths = paths.clone();
-    let worker = thread::spawn(move || {
-        queue::run_worker(&worker_paths)
-    });
+    let worker = thread::spawn(move || queue::run_worker(&worker_paths));
 
     let output = csgo.join("1.dem");
     assert!(
@@ -1433,6 +1441,7 @@ fn status_prints_configuration() {
         .stdout(predicate::str::contains("FACEIT Demo Extractor"))
         .stdout(predicate::str::contains("Runtime"))
         .stdout(predicate::str::contains("Target demo"))
+        .stdout(predicate::str::contains("Notifications"))
         .stdout(predicate::str::contains("Right-click menu"))
         .stdout(predicate::str::contains("\u{1b}[").not());
 }
@@ -1499,6 +1508,73 @@ fn context_menu_quiet_worker_end_to_end() {
 }
 
 #[test]
+fn context_menu_quiet_worker_with_notifications_batch_extraction() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let csgo = directory.path().join("csgo");
+    fs::create_dir_all(&csgo).unwrap();
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "target_filename": "1.dem",
+            "keep_zst": true,
+            "move_to_recycle_bin": false,
+            "notifications_instead_of_console": true,
+            "csgo_path": "csgo"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_faceit-dem"), paths.console_exe()).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_faceit-dem-quiet"), paths.quiet_exe()).unwrap();
+
+    let input1 = directory.path().join("demo1.dem.zst");
+    let input2 = directory.path().join("demo2.dem.zst");
+    let payload1 = demo_payload(4096);
+    let payload2 = demo_payload(8192);
+    write_archive(&input1, &payload1, true);
+    write_archive(&input2, &payload2, true);
+
+    let mut child = ProcessCommand::new(paths.quiet_exe())
+        .env(HOME_ENV, directory.path())
+        .env("FACEIT_DEMO_EXTRACTOR_TEST_NO_PAUSE", "1")
+        .arg("--context-menu")
+        .arg(&input1)
+        .arg(&input2)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the quiet app did not finish");
+        }
+        sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "the quiet app exited with {status}");
+
+    let output1 = csgo.join("1_1.dem");
+    let output2 = csgo.join("1_2.dem");
+    assert!(
+        wait_until(|| output1.is_file() && output2.is_file(), Duration::from_secs(10)),
+        "the batch demos were not extracted"
+    );
+    assert_eq!(fs::read(&output1).unwrap(), payload1);
+    assert_eq!(fs::read(&output2).unwrap(), payload2);
+    assert!(
+        wait_until(
+            || queue::worker_lock_is_free(&paths).unwrap_or(false),
+            Duration::from_secs(10)
+        ),
+        "the worker did not finish"
+    );
+}
+
+#[test]
 fn menu_renders_and_exits_cleanly() {
     let directory = tempfile::tempdir().unwrap();
 
@@ -1511,7 +1587,8 @@ fn menu_renders_and_exits_cleanly() {
         .stdout(predicate::str::contains("Change delimiter"))
         .stdout(predicate::str::contains("Keep original archives"))
         .stdout(predicate::str::contains("Use the Recycle Bin"))
-        .stdout(predicate::str::contains("Select an option [0-7]"))
+        .stdout(predicate::str::contains("Notifications instead of console"))
+        .stdout(predicate::str::contains("Select an option [0-8]"))
         .stdout(predicate::str::contains("Goodbye."))
         .stdout(predicate::str::contains("\u{1b}[").not());
 }
@@ -1558,6 +1635,35 @@ fn menu_option_3_toggles_rename_demo() {
         ));
 
     assert!(!config::load_config(&paths.config).rename_demo);
+}
+
+#[test]
+fn menu_option_8_toggles_notifications_instead_of_console() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    config::ensure_config_file(&paths.config, false);
+
+    assert!(!config::load_config(&paths.config).notifications_instead_of_console);
+
+    cli(directory.path())
+        .write_stdin("8\n0\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Right-click extractions will run hidden and report with a notification.",
+        ));
+
+    assert!(config::load_config(&paths.config).notifications_instead_of_console);
+
+    cli(directory.path())
+        .write_stdin("8\n0\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Right-click extractions will open a console window.",
+        ));
+
+    assert!(!config::load_config(&paths.config).notifications_instead_of_console);
 }
 
 #[test]
