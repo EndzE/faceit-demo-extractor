@@ -381,8 +381,7 @@ fn ensure_config_adds_missing_keys_only() {
     let path = directory.path().join("config.json");
     fs::write(&path, r#"{"target_filename": "demo.dem", "custom": true}"#).unwrap();
 
-    let (ok, error) = config::ensure_config_file(&path, false);
-    assert!(ok, "{error:?}");
+    config::ensure_config_file(&path, false).unwrap();
 
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(
@@ -415,8 +414,7 @@ fn ensure_config_resets_invalid_json_and_non_object() {
     let backup = directory.path().join("config.json.bak");
 
     fs::write(&path, "not json").unwrap();
-    let (ok, error) = config::ensure_config_file(&path, false);
-    assert!(ok, "{error:?}");
+    config::ensure_config_file(&path, false).unwrap();
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         saved,
@@ -438,8 +436,7 @@ fn ensure_config_resets_invalid_json_and_non_object() {
     assert_eq!(fs::read_to_string(&backup).unwrap(), "not json");
 
     fs::write(&path, "[]").unwrap();
-    let (ok, error) = config::ensure_config_file(&path, false);
-    assert!(ok, "{error:?}");
+    config::ensure_config_file(&path, false).unwrap();
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["target_filename"], serde_json::Value::from("1.dem"));
     assert_eq!(fs::read_to_string(&backup).unwrap(), "[]");
@@ -452,12 +449,8 @@ fn ensure_config_refuses_to_reset_when_backup_fails() {
     fs::write(&path, "not json").unwrap();
     fs::create_dir(directory.path().join("config.json.bak")).unwrap();
 
-    let (ok, error) = config::ensure_config_file(&path, false);
-    assert!(!ok);
-    assert!(
-        error.unwrap().contains("refusing to overwrite"),
-        "unexpected error"
-    );
+    let error = config::ensure_config_file(&path, false).unwrap_err();
+    assert!(error.contains("refusing to overwrite"), "unexpected error");
     assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
 }
 
@@ -1827,7 +1820,7 @@ fn menu_disables_change_demo_filename_when_rename_demo_is_off() {
 fn menu_option_3_toggles_rename_demo() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
-    config::ensure_config_file(&paths.config, false);
+    config::ensure_config_file(&paths.config, false).unwrap();
 
     assert!(config::load_config(&paths.config).rename_demo);
 
@@ -1846,7 +1839,7 @@ fn menu_option_3_toggles_rename_demo() {
 fn menu_option_8_toggles_notifications_instead_of_console() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
-    config::ensure_config_file(&paths.config, false);
+    config::ensure_config_file(&paths.config, false).unwrap();
 
     assert!(!config::load_config(&paths.config).notifications_instead_of_console);
 
@@ -1875,7 +1868,7 @@ fn menu_option_8_toggles_notifications_instead_of_console() {
 fn menu_option_5_changes_delimiter_and_rejects_forbidden_symbols() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
-    config::ensure_config_file(&paths.config, false);
+    config::ensure_config_file(&paths.config, false).unwrap();
 
     assert_eq!(config::load_config(&paths.config).delimiter, "_");
 

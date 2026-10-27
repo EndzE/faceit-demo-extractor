@@ -297,52 +297,39 @@ pub fn save_config(path: &Path, updates: &[(&str, Value)]) -> Result<(), String>
     Ok(())
 }
 
-pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>) {
+pub fn ensure_config_file(path: &Path, announce: bool) -> Result<(), String> {
     match fs::read(path) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            match save_config(path, &Config::defaults().updates()) {
-                Ok(()) => {
-                    if announce {
-                        println!(
-                            "{}",
-                            output::field(
-                                "Config",
-                                output::good(format!("created {}", path.display()))
-                            )
-                        );
-                    }
-                    (true, None)
-                }
-                Err(message) => (false, Some(message)),
+            save_config(path, &Config::defaults().updates())?;
+            if announce {
+                println!(
+                    "{}",
+                    output::field(
+                        "Config",
+                        output::good(format!("created {}", path.display()))
+                    )
+                );
             }
+            Ok(())
         }
         Err(err) => {
             warn(format!(
                 "could not read config.json ({err}); using built-in defaults"
             ));
-            (true, None)
+            Ok(())
         }
         Ok(bytes) => match parse_config_json(&bytes) {
             Err(problem) => {
-                let backup = match preserve_invalid_config(path) {
-                    Ok(backup) => backup,
-                    Err(err) => {
-                        return (
-                            false,
-                            Some(format!(
-                                "{problem}; refusing to overwrite it because a backup could not be created: {err}"
-                            )),
-                        );
-                    }
-                };
+                let backup = preserve_invalid_config(path).map_err(|err| {
+                    format!(
+                        "{problem}; refusing to overwrite it because a backup could not be created: {err}"
+                    )
+                })?;
                 warn(format!(
                     "{problem}; moved the original to {} and reset it to defaults",
                     backup.display()
                 ));
-                match save_config(path, &Config::defaults().updates()) {
-                    Ok(()) => (true, None),
-                    Err(message) => (false, Some(message)),
-                }
+                save_config(path, &Config::defaults().updates())
             }
             Ok(data) => {
                 let defaults = Config::defaults().updates();
@@ -353,7 +340,7 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>)
                     .collect();
 
                 if missing.is_empty() {
-                    return (true, None);
+                    return Ok(());
                 }
 
                 let updates: Vec<(&str, Value)> = defaults
@@ -361,24 +348,20 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> (bool, Option<String>)
                     .filter(|(key, _)| missing.contains(key))
                     .collect();
 
-                match save_config(path, &updates) {
-                    Ok(()) => {
-                        if announce {
-                            println!(
-                                "{}",
-                                output::field(
-                                    "Config",
-                                    format!(
-                                        "added missing setting(s): {}",
-                                        output::strong(missing.join(", "))
-                                    )
-                                )
-                            );
-                        }
-                        (true, None)
-                    }
-                    Err(message) => (false, Some(message)),
+                save_config(path, &updates)?;
+                if announce {
+                    println!(
+                        "{}",
+                        output::field(
+                            "Config",
+                            format!(
+                                "added missing setting(s): {}",
+                                output::strong(missing.join(", "))
+                            )
+                        )
+                    );
                 }
+                Ok(())
             }
         },
     }

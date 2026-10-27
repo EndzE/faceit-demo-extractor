@@ -23,14 +23,10 @@ pub fn run_quiet() -> i32 {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let paths = Paths::discover();
 
-    let (ok, config_error) = config::ensure_config_file(&paths.config, false);
-    if !ok {
+    if let Err(config_error) = config::ensure_config_file(&paths.config, false) {
         win32::message_box(
             crate::APP_NAME,
-            &format!(
-                "Could not create or update config.json.\n\n{}",
-                config_error.unwrap_or_default()
-            ),
+            &format!("Could not create or update config.json.\n\n{config_error}"),
         );
         return 1;
     }
@@ -75,11 +71,9 @@ fn dispatch(args: &[OsString]) -> i32 {
     }
 
     let paths = Paths::discover();
-    let (ok, config_error) = config::ensure_config_file(&paths.config, true);
-    if !ok {
+    if let Err(config_error) = config::ensure_config_file(&paths.config, true) {
         output::error(format!(
-            "could not create or update config.json: {}",
-            config_error.unwrap_or_default()
+            "could not create or update config.json: {config_error}"
         ));
         return 1;
     }
