@@ -574,8 +574,14 @@ fn cleanup_orphaned_partials(directory: &Path) {
         let orphaned = now
             .duration_since(modified)
             .is_ok_and(|age| age > ORPHANED_PARTIAL_AGE);
-        if orphaned {
-            let _ = fs::remove_file(entry.path());
+        if !orphaned {
+            continue;
+        }
+        if let Err(err) = fs::remove_file(entry.path()) {
+            warn(format!(
+                "could not remove stale partial file {}: {err}",
+                entry.path().display()
+            ));
         }
     }
 }

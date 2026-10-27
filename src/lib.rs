@@ -121,7 +121,9 @@ pub fn run_console() -> i32 {
             let notifications = WORKER_MODE.load(Ordering::Relaxed)
                 && config::load_config(&Paths::discover().config).notifications_instead_of_console;
             if notifications {
-                let _ = win32::notify("Extraction failed", &message);
+                if let Err(err) = win32::notify("Extraction failed", &message) {
+                    output::warn(format!("failed to show error notification: {err}"));
+                }
             } else {
                 output::pause("Press Enter to close...");
             }
