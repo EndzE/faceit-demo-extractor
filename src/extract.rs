@@ -338,30 +338,37 @@ fn inspect_zstd_header(input: &Path) -> Result<ArchiveHeader, HeaderError> {
     })
 }
 
-fn read_available(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize, HeaderError> {
+fn read_available(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
     while filled < buffer.len() {
         match reader.read(&mut buffer[filled..]) {
             Ok(0) => break,
             Ok(read) => filled += read,
             Err(ref err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(err),
         }
     }
     Ok(filled)
 }
 
+#[derive(Debug)]
+enum DetectError {
+    Open(io::Error),
+    Read(io::Error),
+}
+
+#[derive(Debug)]
 enum DetectedFormat {
     Zstd,
     Bzip2,
     Unrecognized { head: Vec<u8> },
 }
 
-fn detect_format(input: &Path) -> Result<DetectedFormat, HeaderError> {
-    let file = File::open(input).map_err(HeaderError::Open)?;
+fn detect_format(input: &Path) -> Result<DetectedFormat, DetectError> {
+    let file = File::open(input).map_err(DetectError::Open)?;
     let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
     let mut head = [0u8; 4];
-    let filled = read_available(&mut reader, &mut head)?;
+    let filled = read_available(&mut reader, &mut head).map_err(DetectError::Read)?;
 
     if filled != head.len() {
         return Ok(DetectedFormat::Unrecognized {
@@ -420,18 +427,12 @@ fn check_header(input: &Path) -> Option<(ArchiveFormat, ArchiveHeader)> {
             report_unrecognized_format(&head);
             return None;
         }
-        Err(err) => {
-            match err {
-                HeaderError::Open(err) => {
-                    error(format!("could not open the archive: {err}"));
-                }
-                HeaderError::Read(err) => {
-                    error(format!("could not read the archive header: {err}"));
-                }
-                HeaderError::Format(_) => {
-                    unreachable!("format detection never reports structural errors")
-                }
-            }
+        Err(DetectError::Open(err)) => {
+            error(format!("could not open the archive: {err}"));
+            return None;
+        }
+        Err(DetectError::Read(err)) => {
+            error(format!("could not read the archive header: {err}"));
             return None;
         }
     };
@@ -1484,5 +1485,22 @@ mod tests {
             }
             other => panic!("expected Format error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn detect_format_reports_open_error_for_missing_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.dem.zst");
+        match detect_format(&missing) {
+            Err(DetectError::Open(_)) => {}
+            other => panic!("expected DetectError::Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_header_handles_missing_file_without_panic() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.dem.zst");
+        assert!(check_header(&missing).is_none());
     }
 }
