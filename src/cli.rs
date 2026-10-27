@@ -234,7 +234,7 @@ fn worker_field(paths: &Paths) -> String {
         Ok((true, Some(pid))) => output::good(format!("running (pid {pid})")),
         Ok((true, None)) => output::caution("running (pid unknown)"),
         Ok((false, _)) => output::muted("not running"),
-        Err(message) => output::bad(message),
+        Err(message) => output::bad(message.to_string()),
     }
 }
 

@@ -159,7 +159,7 @@ fn report_permission_denied(output_dir: &Path) {
     println!(
         "  {} Check that {} is writable.",
         output::note("-"),
-        output::strong(output_dir.display())
+        output::strong(output_dir.to_string_lossy())
     );
 }
 
@@ -1169,7 +1169,7 @@ pub fn run_extract_batch_outcome(
         println!();
         println!("{}", output::section("Failed archives"));
         for input in &failed {
-            println!("  {}", output::bad(input.display()));
+            println!("  {}", output::bad(input.to_string_lossy()));
         }
     }
 

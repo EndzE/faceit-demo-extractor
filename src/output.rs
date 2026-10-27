@@ -19,40 +19,40 @@ fn is_silent() -> bool {
     SILENT.load(Ordering::Relaxed)
 }
 
-pub fn title(text: impl Display) -> String {
-    text.to_string().bright_cyan().bold().to_string()
+pub fn title(text: impl AsRef<str>) -> String {
+    text.as_ref().bright_cyan().bold().to_string()
 }
 
-pub fn section(text: &str) -> String {
-    text.cyan().bold().to_string()
+pub fn section(text: impl AsRef<str>) -> String {
+    text.as_ref().cyan().bold().to_string()
 }
 
-pub fn label(text: &str) -> String {
-    text.dimmed().to_string()
+pub fn label(text: impl AsRef<str>) -> String {
+    text.as_ref().dimmed().to_string()
 }
 
-pub fn strong(text: impl Display) -> String {
-    text.to_string().bold().to_string()
+pub fn strong(text: impl AsRef<str>) -> String {
+    text.as_ref().bold().to_string()
 }
 
-pub fn good(text: impl Display) -> String {
-    text.to_string().green().to_string()
+pub fn good(text: impl AsRef<str>) -> String {
+    text.as_ref().green().to_string()
 }
 
-pub fn caution(text: impl Display) -> String {
-    text.to_string().yellow().to_string()
+pub fn caution(text: impl AsRef<str>) -> String {
+    text.as_ref().yellow().to_string()
 }
 
-pub fn bad(text: impl Display) -> String {
-    text.to_string().red().to_string()
+pub fn bad(text: impl AsRef<str>) -> String {
+    text.as_ref().red().to_string()
 }
 
-pub fn note(text: impl Display) -> String {
-    text.to_string().cyan().to_string()
+pub fn note(text: impl AsRef<str>) -> String {
+    text.as_ref().cyan().to_string()
 }
 
-pub fn muted(text: impl Display) -> String {
-    text.to_string().dimmed().to_string()
+pub fn muted(text: impl AsRef<str>) -> String {
+    text.as_ref().dimmed().to_string()
 }
 
 pub fn rule(width: usize) -> String {
@@ -242,7 +242,8 @@ impl Drop for Progress {
 
 #[cfg(test)]
 mod tests {
-    use super::format_size;
+    use super::*;
+    use std::borrow::Cow;
 
     #[test]
     fn format_size_uses_a_readable_unit() {
@@ -253,5 +254,18 @@ mod tests {
         assert_eq!(format_size(1024 * 1024), "1.0 MB");
         assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
         assert_eq!(format_size(1024u64.pow(4)), "1.0 TB");
+    }
+
+    #[test]
+    fn styling_helpers_accept_various_string_types() {
+        assert!(title("title").contains("title"));
+        assert!(section("section").contains("section"));
+        assert!(label("label").contains("label"));
+        assert!(strong(String::from("strong")).contains("strong"));
+        assert!(good("good").contains("good"));
+        assert!(caution(Cow::Borrowed("caution")).contains("caution"));
+        assert!(bad(String::from("bad")).contains("bad"));
+        assert!(note("note").contains("note"));
+        assert!(muted("muted").contains("muted"));
     }
 }
