@@ -32,6 +32,10 @@ const APP_AUMID: &str = "FaceitDemoExtractor";
 const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
 static APP_AUMID_REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 
+/// Teardown grace period allowing asynchronous WinRT RPC transmission to the
+/// Windows Notification Platform (Action Center) before the COM apartment is uninitialized.
+const TOAST_TEARDOWN_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
+
 struct ComGuard(bool);
 
 impl Drop for ComGuard {
@@ -326,23 +330,22 @@ pub fn notify(title: &str, message: &str) -> Result<(), String> {
 
     // SAFETY: Initializes COM for the current thread with multithreaded concurrency.
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+    let _com_guard = ComGuard(initialized);
 
-    let result = (|| -> windows::core::Result<()> {
-        let document = create_toast_document(title, message)?;
-        let toast = ToastNotification::CreateToastNotification(&document)?;
-        let notifier =
-            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_AUMID))?;
-        notifier.Show(&toast)?;
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        Ok(())
-    })();
+    let document = create_toast_document(title, message).map_err(|err| err.to_string())?;
+    let toast =
+        ToastNotification::CreateToastNotification(&document).map_err(|err| err.to_string())?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_AUMID))
+        .map_err(|err| err.to_string())?;
+    notifier.Show(&toast).map_err(|err| err.to_string())?;
 
-    if initialized {
-        // SAFETY: Balances the successful CoInitializeEx call on the same thread.
-        unsafe { CoUninitialize() };
-    }
+    // WinRT ToastNotifier::Show transmits notifications via asynchronous RPC to the
+    // Windows Notification Platform (Action Center). Allow an adequate teardown grace
+    // period before uninitializing COM and terminating the process so the IPC payload
+    // is reliably accepted and not dropped prematurely.
+    std::thread::sleep(TOAST_TEARDOWN_GRACE_PERIOD);
 
-    result.map_err(|err| err.to_string())
+    Ok(())
 }
 
 fn show_message_box(title: &str, text: &str, icon: MESSAGEBOX_STYLE) {
@@ -453,5 +456,15 @@ mod tests {
         let res_long = recycle_file(&long_file);
         assert!(res_long.is_ok());
         assert!(!long_file.exists());
+    }
+
+    #[test]
+    #[ignore]
+    fn test_notify() {
+        let res = notify(
+            "Faceit Demo Extractor Test",
+            "Testing notification delivery",
+        );
+        assert!(res.is_ok());
     }
 }
