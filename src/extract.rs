@@ -1,3 +1,4 @@
+use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -37,10 +38,16 @@ enum CopyError {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArchiveFormat {
     Zstd,
     Bzip2,
+}
+
+impl fmt::Display for ArchiveFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
 }
 
 impl ArchiveFormat {
@@ -1224,6 +1231,21 @@ pub fn run_extract_batch_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_archive_format_traits() {
+        use std::collections::HashSet;
+
+        assert_eq!(ArchiveFormat::Zstd.to_string(), "Zstandard");
+        assert_eq!(ArchiveFormat::Bzip2.to_string(), "Bzip2");
+        assert_eq!(format!("{}", ArchiveFormat::Zstd), "Zstandard");
+
+        let mut set = HashSet::new();
+        set.insert(ArchiveFormat::Zstd);
+        set.insert(ArchiveFormat::Bzip2);
+        assert!(set.contains(&ArchiveFormat::Zstd));
+        assert_eq!(set.len(), 2);
+    }
 
     fn zstd_frame(payload: &[u8], checksum: bool) -> Vec<u8> {
         let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap();

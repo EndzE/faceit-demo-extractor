@@ -39,7 +39,7 @@ pub static EXTRACTING: AtomicBool = AtomicBool::new(false);
 pub static WORKER_MODE: AtomicBool = AtomicBool::new(false);
 pub static PAUSING: AtomicBool = AtomicBool::new(false);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Paths {
     pub exe: PathBuf,
     pub exe_dir: PathBuf,
@@ -195,5 +195,23 @@ mod tests {
     fn test_panic_message_other() {
         let payload: Box<dyn std::any::Any + Send> = Box::new(42i32);
         assert_eq!(panic_message(payload.as_ref()), "unknown panic");
+    }
+
+    #[test]
+    fn test_paths_traits() {
+        use std::collections::HashSet;
+
+        let p1 = Paths {
+            exe: PathBuf::from("faceit-dem.exe"),
+            exe_dir: PathBuf::from("."),
+            config: PathBuf::from("config.json"),
+            queue_dir: PathBuf::from("queue"),
+        };
+        let p2 = p1.clone();
+        assert_eq!(p1, p2);
+
+        let mut set = HashSet::new();
+        set.insert(p1);
+        assert!(set.contains(&p2));
     }
 }

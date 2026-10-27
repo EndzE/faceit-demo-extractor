@@ -41,7 +41,7 @@ pub const CTX_MENUS: &[ContextMenu] = &[
 ];
 
 /// One Explorer right-click menu registration.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ContextMenu {
     pub extension: &'static str,
     pub key: &'static str,
@@ -217,4 +217,25 @@ pub fn perform_update_label(paths: &Paths) -> Result<(), RegistryError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_context_menu_traits() {
+        let menu1 = ContextMenu {
+            extension: ".zst",
+            key: CTX_KEY,
+            command_key: CTX_COMMAND_KEY,
+        };
+        let menu2 = menu1;
+        assert_eq!(menu1, menu2);
+
+        let mut set = HashSet::new();
+        set.insert(menu1);
+        assert!(set.contains(&menu2));
+    }
 }
