@@ -17,7 +17,7 @@ use faceit_demo_extractor::extract::{self, ExtractResult};
 use faceit_demo_extractor::queue;
 use faceit_demo_extractor::registry;
 use faceit_demo_extractor::validate::{
-    DemoFileName, is_valid_demo_filename, is_valid_filename, utf16_len,
+    DemoFileName, DemoFileNameError, is_valid_demo_filename, is_valid_filename, utf16_len,
 };
 use faceit_demo_extractor::{DEMO_MAGIC, HOME_ENV, MAX_FILENAME_LEN, Paths};
 
@@ -157,7 +157,14 @@ fn demo_file_name_parse_and_traits() {
     assert_eq!(DemoFileName::parse("  match.dem  ").unwrap(), "match.dem");
 
     // Invalid extensions
-    assert!(DemoFileName::parse("1.txt").is_err());
+    assert_eq!(
+        DemoFileName::parse("1.txt"),
+        Err(DemoFileNameError::Invalid("1.txt".to_string()))
+    );
+    assert_eq!(
+        DemoFileName::parse("1.txt").unwrap_err().to_string(),
+        "invalid demo filename: 1.txt"
+    );
     assert!(DemoFileName::parse("match").is_err());
 
     // Reserved Windows names

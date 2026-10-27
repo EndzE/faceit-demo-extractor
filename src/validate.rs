@@ -85,6 +85,13 @@ pub fn is_valid_delimiter(delim: &str) -> bool {
     true
 }
 
+/// An error indicating that a string could not be parsed as a valid [`.dem` filename](DemoFileName).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DemoFileNameError {
+    #[error("invalid demo filename: {0}")]
+    Invalid(String),
+}
+
 /// A validated `.dem` filename that is guaranteed to be safe across all Windows filesystems.
 ///
 /// Cannot be constructed directly with arbitrary strings; must be parsed via [`DemoFileName::parse`]
@@ -98,12 +105,12 @@ impl DemoFileName {
     /// Parses and validates a raw filename string.
     ///
     /// Trims leading and trailing whitespace. Returns an error if the filename is invalid or reserved.
-    pub fn parse(raw: &str) -> Result<Self, String> {
+    pub fn parse(raw: &str) -> Result<Self, DemoFileNameError> {
         let trimmed = raw.trim();
         if is_valid_demo_filename(trimmed) {
             Ok(Self(trimmed.to_string()))
         } else {
-            Err(format!("invalid demo filename: {raw}"))
+            Err(DemoFileNameError::Invalid(raw.to_string()))
         }
     }
 
@@ -257,7 +264,7 @@ impl PartialEq<DemoFileName> for String {
 }
 
 impl FromStr for DemoFileName {
-    type Err = String;
+    type Err = DemoFileNameError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
@@ -265,7 +272,7 @@ impl FromStr for DemoFileName {
 }
 
 impl TryFrom<&str> for DemoFileName {
-    type Error = String;
+    type Error = DemoFileNameError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::parse(value)
@@ -273,7 +280,7 @@ impl TryFrom<&str> for DemoFileName {
 }
 
 impl TryFrom<String> for DemoFileName {
-    type Error = String;
+    type Error = DemoFileNameError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::parse(&value)
