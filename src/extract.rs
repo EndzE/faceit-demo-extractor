@@ -1,3 +1,5 @@
+//! Archive decompression routines, checksum verification, and file conflict resolution.
+
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
@@ -23,10 +25,14 @@ const PARTIAL_PREFIX: &str = ".faceit-";
 const PARTIAL_SUFFIX: &str = ".partial";
 const ORPHANED_PARTIAL_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Result status of a single or batch extraction operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractResult {
+    /// Extraction succeeded and files were written cleanly.
     Ok,
+    /// Extraction failed due to an I/O, format, or checksum error.
     Failed,
+    /// Extraction was cancelled by the user.
     Cancelled,
 }
 
@@ -38,9 +44,12 @@ enum CopyError {
     Cancelled,
 }
 
+/// Supported archive compression algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArchiveFormat {
+    /// Zstandard compression (`.zst`).
     Zstd,
+    /// bzip2 compression (`.bz2`).
     Bzip2,
 }
 
@@ -595,6 +604,7 @@ fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     crate::queue::path_key(&absolute(left)) == crate::queue::path_key(&absolute(right))
 }
 
+/// Extracts a single compressed demo archive to `output` using an internally allocated buffer.
 pub fn extract_one(
     input: &Path,
     output: &Path,
@@ -605,6 +615,7 @@ pub fn extract_one(
     extract_one_with_buffer(input, output, keep_zst, move_to_recycle_bin, &mut buffer)
 }
 
+/// Extracts a single compressed demo archive to `output` using a caller-provided reusable buffer.
 pub fn extract_one_with_buffer(
     input: &Path,
     output: &Path,
@@ -791,6 +802,7 @@ pub fn extract_one_with_buffer(
     ExtractResult::Ok
 }
 
+/// Tests the integrity of an archive by decompressing and verifying its header and checksum without writing output.
 pub fn test_archive(input: &Path) -> ExtractResult {
     if !input.is_file() {
         error(format!("input file not found: {}", input.display()));
@@ -867,15 +879,23 @@ pub fn test_archive(input: &Path) -> ExtractResult {
     }
 }
 
+/// Error encountered when deleting an original archive file after extraction.
 #[derive(Debug, thiserror::Error)]
 pub enum DeleteOriginalError {
+    /// Moving the file to the Windows Recycle Bin failed.
     #[error("failed to recycle file: {0}")]
     Recycle(#[from] crate::win32::Win32Error),
 
+    /// Deleting the file directly from the filesystem failed.
     #[error("failed to remove file: {0}")]
     Io(#[from] io::Error),
 }
 
+/// Deletes the original archive at `path`, optionally sending it to the Windows Recycle Bin.
+///
+/// # Errors
+///
+/// Returns a [`DeleteOriginalError`] if recycling or direct removal fails.
 pub fn delete_original(path: &Path, use_recycle_bin: bool) -> Result<(), DeleteOriginalError> {
     if use_recycle_bin {
         win32::recycle_file(path)?;
@@ -889,6 +909,7 @@ pub fn delete_original(path: &Path, use_recycle_bin: bool) -> Result<(), DeleteO
     }
 }
 
+/// Splits a filename into its stem and extension components without heap allocation.
 #[must_use]
 pub fn split_ext(name: &str) -> (&str, &str) {
     let base_start = name.rfind(['\\', '/']).map_or(0, |index| index + 1);
@@ -900,6 +921,7 @@ pub fn split_ext(name: &str) -> (&str, &str) {
     }
 }
 
+/// Derives a clean `.dem` demo filename from an input archive path, stripping archive extensions and sanitizing.
 #[must_use]
 pub fn uncompressed_demo_name(input: &Path) -> DemoFileName {
     let file_name = input
@@ -965,19 +987,26 @@ fn next_free_name_with_attempts(
     name_with_suffix(stem, &format!("{delimiter}{stamp}"), ext)
 }
 
+/// Computes the next non-colliding filename in `folder` by appending numbered delimiters.
 #[must_use]
 pub fn next_free_name(folder: &Path, stem: &str, ext: &str, delimiter: &str) -> String {
     next_free_name_with_attempts(folder, stem, ext, delimiter, 10_000)
 }
 
+/// Aggregated outcome of a batch extraction run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractOutcome {
+    /// Process exit code suitable for terminating the application.
     pub exit_code: i32,
+    /// List of demo stems successfully written to the CS2 directory.
     pub extracted: Vec<String>,
+    /// Number of archives that failed extraction.
     pub failed: usize,
+    /// Total number of archive files processed.
     pub total: usize,
 }
 
+/// Dispatches extraction for a batch of input files according to application paths and configuration.
 pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> ExtractOutcome {
     if files.is_empty() {
         return ExtractOutcome {
@@ -1028,6 +1057,7 @@ pub fn run_extract_mode(paths: &Paths, files: &[PathBuf], pause_after: bool) -> 
     run_extract_batch_outcome(files, &csgo, &source, &config, pause_after)
 }
 
+/// Executes batch extraction of archives into `csgo`, returning the exit code.
 pub fn run_extract_batch(
     files: &[PathBuf],
     csgo: &Path,
@@ -1038,6 +1068,7 @@ pub fn run_extract_batch(
     run_extract_batch_outcome(files, csgo, source, config, pause_after).exit_code
 }
 
+/// Executes batch extraction of archives into `csgo`, returning detailed summary outcomes.
 pub fn run_extract_batch_outcome(
     files: &[PathBuf],
     csgo: &Path,

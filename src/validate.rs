@@ -1,3 +1,5 @@
+//! Filename validation, Windows DOS device reserved name checking, and safe demo naming types.
+
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
@@ -8,6 +10,7 @@ use crate::MAX_FILENAME_LEN;
 
 const INVALID_FILENAME_CHARS: &[char] = &['<', '>', ':', '"', '|', '?', '*'];
 
+/// DOS device names reserved by Windows across NTFS, FAT, and ReFS filesystems.
 pub const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4",
     "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7",
@@ -21,11 +24,13 @@ fn is_reserved_name(name: &str) -> bool {
         .any(|&reserved| reserved.eq_ignore_ascii_case(name))
 }
 
+/// Returns the length of `value` when encoded as UTF-16 code units.
 #[must_use]
 pub fn utf16_len(value: &str) -> usize {
     value.encode_utf16().count()
 }
 
+/// Checks whether `name` is a valid Windows filename ending in `.dem`.
 #[must_use]
 pub fn is_valid_demo_filename(name: &str) -> bool {
     is_valid_filename(name)
@@ -34,6 +39,7 @@ pub fn is_valid_demo_filename(name: &str) -> bool {
             .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("dem"))
 }
 
+/// Checks whether `name` is a valid filename component according to Windows NTFS rules.
 #[must_use]
 pub fn is_valid_filename(name: &str) -> bool {
     if name.is_empty() || name == "." || name == ".." {
@@ -69,6 +75,7 @@ pub fn is_valid_filename(name: &str) -> bool {
     !is_reserved_name(stem)
 }
 
+/// Checks whether `delim` is a valid filename delimiter component.
 #[must_use]
 pub fn is_valid_delimiter(delim: &str) -> bool {
     if delim.is_empty() {
@@ -98,6 +105,7 @@ pub fn is_valid_delimiter(delim: &str) -> bool {
 /// An error indicating that a string could not be parsed as a valid [`.dem` filename](DemoFileName).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DemoFileNameError {
+    /// The string violates Windows filename conventions or lacks a `.dem` extension.
     #[error("invalid demo filename: {0}")]
     Invalid(String),
 }
@@ -209,11 +217,13 @@ impl DemoFileName {
         }
     }
 
+    /// Returns a string slice of the underlying validated filename.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// Consumes the wrapper, returning the owned [`String`].
     #[must_use]
     pub fn into_inner(self) -> String {
         self.0

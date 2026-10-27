@@ -1,3 +1,5 @@
+//! Application configuration management, JSON serialization, and default settings.
+
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
@@ -17,16 +19,25 @@ use crate::{
 
 static CONFIG_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
+/// Application configuration settings persisted in `config.json`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(default, from = "RawConfig")]
 pub struct Config {
+    /// Whether extracted demo files are renamed according to [`Config::target_filename`].
     pub rename_demo: bool,
+    /// Destination filename when renaming extracted demos (e.g. `1.dem`).
     pub target_filename: String,
+    /// Delimiter string used when suffixing filenames on conflict (e.g. `_`).
     pub delimiter: String,
+    /// Whether original archive files (`.zst` or `.bz2`) are kept after extraction.
     pub keep_zst: bool,
+    /// Whether deleted archives are sent to the Windows Recycle Bin instead of permanently deleted.
     pub move_to_recycle_bin: bool,
+    /// Whether single-file extraction overwrites an existing destination file without suffixing.
     pub overwrite_single_file_extraction: bool,
+    /// Whether background workers surface desktop toast notifications instead of console windows.
     pub notifications_instead_of_console: bool,
+    /// Custom path override for the CS2 `csgo` folder.
     pub csgo_path: Option<String>,
 }
 
@@ -168,6 +179,8 @@ fn coerce_bool_val(val: Option<Value>, key: &str, default: bool) -> bool {
 }
 
 impl Config {
+    /// Returns a new [`Config`] populated with default values.
+    #[must_use]
     pub fn defaults() -> Self {
         Self {
             rename_demo: DEFAULT_RENAME_DEMO,
@@ -181,6 +194,8 @@ impl Config {
         }
     }
 
+    /// Converts this [`Config`] into key-value pairs suitable for merging into a JSON object.
+    #[must_use]
     pub fn updates(&self) -> Vec<(&'static str, Value)> {
         vec![
             ("rename_demo", Value::Bool(self.rename_demo)),
@@ -233,6 +248,8 @@ fn parse_config_json(bytes: &[u8]) -> Result<Map<String, Value>, String> {
     }
 }
 
+/// Reads and parses the raw JSON map from the config file, returning an empty map on failure.
+#[must_use]
 pub fn read_config_json(path: &Path) -> Map<String, Value> {
     let Ok(bytes) = fs::read(path) else {
         return Map::new();
@@ -240,6 +257,8 @@ pub fn read_config_json(path: &Path) -> Map<String, Value> {
     parse_config_json(&bytes).unwrap_or_default()
 }
 
+/// Loads application configuration from `path`, returning default values if the file is missing or invalid.
+#[must_use]
 pub fn load_config(path: &Path) -> Config {
     let Ok(bytes) = fs::read(path) else {
         return Config::defaults();
@@ -267,6 +286,11 @@ fn preserve_invalid_config(path: &Path) -> Result<PathBuf, String> {
     Ok(backup)
 }
 
+/// Merges the provided `updates` into the configuration file at `path`, writing atomically via a temporary file.
+///
+/// # Errors
+///
+/// Returns an error message if reading the existing config fails, serialization fails, or writing fails.
 pub fn save_config(path: &Path, updates: &[(&str, Value)]) -> Result<(), String> {
     let mut merged = match fs::read(path) {
         Ok(bytes) => parse_config_json(&bytes)?,
@@ -294,6 +318,11 @@ pub fn save_config(path: &Path, updates: &[(&str, Value)]) -> Result<(), String>
     Ok(())
 }
 
+/// Ensures the configuration file exists at `path`, initializing it with defaults or filling in missing keys.
+///
+/// # Errors
+///
+/// Returns an error message if saving default or updated settings fails.
 pub fn ensure_config_file(path: &Path, announce: bool) -> Result<(), String> {
     match fs::read(path) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => {

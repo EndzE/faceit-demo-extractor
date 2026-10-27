@@ -1,3 +1,5 @@
+//! Command-line argument parsing, terminal dispatch, and interactive diagnostic displays.
+
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -12,11 +14,13 @@ const REGISTRY_FLAGS: &[&str] = &["--install", "--remove", "--update-label"];
 const HELP_FLAGS: &[&str] = &["-h", "--help"];
 const MENU_WIDTH: usize = 32;
 
+/// Runs the command-line application in console mode, parsing CLI arguments and returning the exit code.
 pub fn run() -> i32 {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     dispatch(&args)
 }
 
+/// Runs the application in quiet mode for Explorer context menu invocation, returning the exit code.
 pub fn run_quiet() -> i32 {
     output::set_silent(true);
 
@@ -155,6 +159,8 @@ fn command_line(command: &str, description: &str) -> String {
     )
 }
 
+/// Formats and returns the multi-line CLI usage help string.
+#[must_use]
 pub fn usage() -> String {
     let lines = [
         output::banner(),
@@ -238,6 +244,8 @@ fn worker_field(paths: &Paths) -> String {
     }
 }
 
+/// Generates diagnostic doctor status lines for the specified paths and context menu definitions.
+#[must_use]
 pub fn status_lines_for(paths: &Paths, menus: &[registry::ContextMenu]) -> Vec<String> {
     let config = config::load_config(&paths.config);
     let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
@@ -353,6 +361,8 @@ pub fn status_lines_for(paths: &Paths, menus: &[registry::ContextMenu]) -> Vec<S
     lines
 }
 
+/// Generates diagnostic doctor status lines using the default context menu definitions.
+#[must_use]
 pub fn status_lines(paths: &Paths) -> Vec<String> {
     status_lines_for(paths, registry::CTX_MENUS)
 }

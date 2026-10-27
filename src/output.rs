@@ -1,3 +1,5 @@
+//! Terminal formatting, ANSI color styling, diagnostic logs, and decompression progress display.
+
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,10 +9,12 @@ use colored::Colorize;
 
 use crate::APP_NAME;
 
+/// Default character width for horizontal rule dividers.
 pub const RULE_WIDTH: usize = 66;
 
 static SILENT: AtomicBool = AtomicBool::new(false);
 
+/// Enables or disables all console output globally for quiet background worker operations.
 pub fn set_silent(silent: bool) {
     SILENT.store(silent, Ordering::Relaxed);
 }
@@ -19,50 +23,73 @@ fn is_silent() -> bool {
     SILENT.load(Ordering::Relaxed)
 }
 
+/// Styles text as a prominent bright cyan title.
+#[must_use]
 pub fn title(text: impl AsRef<str>) -> String {
     text.as_ref().bright_cyan().bold().to_string()
 }
 
+/// Styles text as a cyan section header.
+#[must_use]
 pub fn section(text: impl AsRef<str>) -> String {
     text.as_ref().cyan().bold().to_string()
 }
 
+/// Styles text as a dimmed field label.
+#[must_use]
 pub fn label(text: impl AsRef<str>) -> String {
     text.as_ref().dimmed().to_string()
 }
 
+/// Styles text in bold font.
+#[must_use]
 pub fn strong(text: impl AsRef<str>) -> String {
     text.as_ref().bold().to_string()
 }
 
+/// Styles text in green representing success or healthy state.
+#[must_use]
 pub fn good(text: impl AsRef<str>) -> String {
     text.as_ref().green().to_string()
 }
 
+/// Styles text in yellow representing a caution or non-critical issue.
+#[must_use]
 pub fn caution(text: impl AsRef<str>) -> String {
     text.as_ref().yellow().to_string()
 }
 
+/// Styles text in red representing an error or failure.
+#[must_use]
 pub fn bad(text: impl AsRef<str>) -> String {
     text.as_ref().red().to_string()
 }
 
+/// Styles text in cyan for informative notes or bullets.
+#[must_use]
 pub fn note(text: impl AsRef<str>) -> String {
     text.as_ref().cyan().to_string()
 }
 
+/// Styles text in dimmed gray for secondary or muted info.
+#[must_use]
 pub fn muted(text: impl AsRef<str>) -> String {
     text.as_ref().dimmed().to_string()
 }
 
+/// Renders a horizontal rule of the specified character `width`.
+#[must_use]
 pub fn rule(width: usize) -> String {
     "─".repeat(width).dimmed().to_string()
 }
 
+/// Generates the standard application header banner with title and divider.
+#[must_use]
 pub fn banner() -> String {
     format!("{}\n{}", title(APP_NAME), rule(RULE_WIDTH))
 }
 
+/// Clears the terminal screen and scrollback buffer when attached to an interactive console.
 pub fn clear_screen() {
     if is_silent() || !io::stdout().is_terminal() {
         return;
@@ -76,10 +103,14 @@ pub fn clear_screen() {
     }
 }
 
+/// Formats a key-value diagnostic pair aligned with standard indentation.
+#[must_use]
 pub fn field(name: &str, value: impl Display) -> String {
     format!("  {}  {value}", format!("{name:<16}").dimmed())
 }
 
+/// Formats a boolean flag as green "on" or dimmed "off".
+#[must_use]
 pub fn on_off(value: bool) -> String {
     if value {
         "on".green().to_string()
@@ -88,6 +119,8 @@ pub fn on_off(value: bool) -> String {
     }
 }
 
+/// Splits a message into trimmed lines stripping carriage returns.
+#[must_use]
 pub fn split_lines(message: &str) -> Vec<&str> {
     message
         .split('\n')
@@ -106,6 +139,7 @@ fn print_prefixed(prefix: &str, styled_prefix: String, message: &str) {
     }
 }
 
+/// Prints a yellow warning diagnostic message with appropriate indentation.
 pub fn warn(message: impl AsRef<str>) {
     if is_silent() {
         return;
@@ -117,6 +151,7 @@ pub fn warn(message: impl AsRef<str>) {
     );
 }
 
+/// Prints a red error diagnostic message with appropriate indentation.
 pub fn error(message: impl AsRef<str>) {
     if is_silent() {
         return;
@@ -128,10 +163,12 @@ pub fn error(message: impl AsRef<str>) {
     );
 }
 
+/// Prints a yellow "Cancelled." cancellation notice to stderr.
 pub fn cancelled() {
     eprintln!("\n{}", "Cancelled.".yellow().bold());
 }
 
+/// Pauses execution until the user presses Enter, unless silenced or redirected.
 pub fn pause(message: &str) {
     if is_silent()
         || std::env::var_os("FACEIT_DEMO_EXTRACTOR_TEST_NO_PAUSE").is_some()
@@ -148,10 +185,14 @@ pub fn pause(message: &str) {
     crate::PAUSING.store(false, Ordering::Relaxed);
 }
 
+/// Formats a byte size in megabytes with 1 decimal place (e.g. `12.3 MB`).
+#[must_use]
 pub fn format_mb(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
 }
 
+/// Formats a byte size into the most natural binary unit (B, KB, MB, GB, TB).
+#[must_use]
 pub fn format_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -172,6 +213,7 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
+/// Interactive console progress indicator showing percentage and byte throughput.
 pub struct Progress {
     total: Option<u64>,
     interactive: bool,
@@ -180,6 +222,8 @@ pub struct Progress {
 }
 
 impl Progress {
+    /// Constructs a new [`Progress`] tracker with optional known total decompressed size.
+    #[must_use]
     pub fn new(total: Option<u64>) -> Self {
         Self {
             total: total.filter(|total| *total > 0),
@@ -189,6 +233,7 @@ impl Progress {
         }
     }
 
+    /// Updates the displayed progress with the current number of bytes decoded.
     pub fn update(&mut self, current: u64) {
         if !self.interactive {
             return;
@@ -223,6 +268,7 @@ impl Progress {
         self.last_render = Some(Instant::now());
     }
 
+    /// Clears the progress line from the console display.
     pub fn clear(&mut self) {
         if !self.active {
             return;

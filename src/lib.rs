@@ -1,4 +1,27 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
+#![warn(missing_docs)]
+//! # FACEIT Demo Extractor
+//!
+//! A fast, background Windows utility for extracting and renaming CS2 demos
+//! (`.dem.zst` and `.dem.bz2`) downloaded from FACEIT.
+//!
+//! ## Overview
+//!
+//! The crate provides decompression for Zstandard and bzip2 archives, CS2 demo folder
+//! auto-discovery, Windows Explorer context menu integration, and a background queue worker.
+//!
+//! ## Submodules
+//!
+//! - [`cli`] - Command-line dispatch and terminal interaction.
+//! - [`config`] - Application configuration loading, saving, and defaults.
+//! - [`cs2`] - Counter-Strike 2 demo directory location via Steam registry keys.
+//! - [`extract`] - Archive decompression routines, checksum verification, and file conflict resolution.
+//! - [`output`] - Formatted console output, styled banners, and interactive progress bars.
+//! - [`queue`] - Inter-process FIFO job queue for Explorer batch extractions.
+//! - [`registry`] - Windows Registry management for Explorer right-click context menus.
+//! - [`validate`] - Windows filename and demo naming convention validation.
+//! - [`win32`] - Win32 Shell API, WinRT toast notifications, and console primitives.
+
 #[cfg(not(windows))]
 compile_error!("faceit-dem is Windows-only.");
 
@@ -21,33 +44,55 @@ pub use crate::win32::Win32Error;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Human-readable application name used in banners and dialog titles.
 pub const APP_NAME: &str = "FACEIT Demo Extractor";
+/// Default demo filename when renaming is enabled.
 pub const DEFAULT_TARGET_FILENAME: &str = "1.dem";
+/// Default suffix delimiter when resolving filename collisions.
 pub const DEFAULT_DELIMITER: &str = "_";
+/// Default preference for keeping the original compressed archive after extraction.
 pub const DEFAULT_KEEP_ZST: bool = false;
+/// Default preference for moving deleted archives to the Windows Recycle Bin.
 pub const DEFAULT_MOVE_TO_RECYCLE_BIN: bool = false;
+/// Default preference for overwriting target files during single-file extraction.
 pub const DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION: bool = true;
+/// Default preference for renaming extracted demos to [`DEFAULT_TARGET_FILENAME`].
 pub const DEFAULT_RENAME_DEMO: bool = true;
+/// Default preference for desktop toast notifications instead of console output.
 pub const DEFAULT_NOTIFICATIONS_INSTEAD_OF_CONSOLE: bool = false;
 
+/// Expected 8-byte magic header at the beginning of a valid CS2 demo file.
 pub const DEMO_MAGIC: &[u8] = b"PBDEMS2\x00";
+/// Maximum allowed length in UTF-16 code units for a single Windows filename component.
 pub const MAX_FILENAME_LEN: usize = 255;
+/// Environment variable name that overrides the application home directory root.
 pub const HOME_ENV: &str = "FACEIT_DEMO_EXTRACTOR_HOME";
 
+/// Flag set when an extraction cancellation (e.g. Ctrl+C) is requested.
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
+/// Flag indicating whether active decompression is in progress.
 pub static EXTRACTING: AtomicBool = AtomicBool::new(false);
+/// Flag indicating whether the current process is running as a background queue worker.
 pub static WORKER_MODE: AtomicBool = AtomicBool::new(false);
+/// Flag indicating whether the console UI is waiting on an interactive pause prompt.
 pub static PAUSING: AtomicBool = AtomicBool::new(false);
 
+/// Standard application paths for binaries, configuration, and job queue directories.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Paths {
+    /// Path to the executing binary.
     pub exe: PathBuf,
+    /// Directory containing the executing binary.
     pub exe_dir: PathBuf,
+    /// Path to `config.json`.
     pub config: PathBuf,
+    /// Path to the temporary queue directory for job scheduling.
     pub queue_dir: PathBuf,
 }
 
 impl Paths {
+    /// Discovers application paths from the environment or the current executable location.
+    #[must_use]
     pub fn discover() -> Self {
         if let Some(root) = std::env::var_os(HOME_ENV) {
             return Self::from_root(Path::new(&root));
@@ -78,31 +123,44 @@ impl Paths {
         }
     }
 
+    /// Constructs isolated [`Paths`] anchored at `root` for testing.
+    #[must_use]
     pub fn for_tests(root: &Path) -> Self {
         Self::from_root(root)
     }
 
+    /// Returns the path to the console executable (`faceit-dem.exe`).
+    #[must_use]
     pub fn console_exe(&self) -> PathBuf {
         self.exe_dir.join("faceit-dem.exe")
     }
 
+    /// Returns the path to the quiet windowless executable (`faceit-dem-quiet.exe`).
+    #[must_use]
     pub fn quiet_exe(&self) -> PathBuf {
         self.exe_dir.join("faceit-dem-quiet.exe")
     }
 
+    /// Returns the path to the inter-process worker lockfile.
+    #[must_use]
     pub fn worker_lock(&self) -> PathBuf {
         self.queue_dir.join("worker.lock")
     }
 
+    /// Returns the path to the worker process ID file.
+    #[must_use]
     pub fn worker_pid(&self) -> PathBuf {
         self.queue_dir.join("worker.pid")
     }
 
+    /// Returns the path to the inter-process spawn lockfile.
+    #[must_use]
     pub fn spawn_lock(&self) -> PathBuf {
         self.queue_dir.join("spawn.lock")
     }
 }
 
+/// Executes the console application entry point, returning the process exit code.
 pub fn run_console() -> i32 {
     #[cfg(windows)]
     let _ = colored::control::set_virtual_terminal(true);
@@ -132,6 +190,7 @@ pub fn run_console() -> i32 {
     }
 }
 
+/// Executes the quiet windowless entry point, returning the process exit code.
 pub fn run_quiet() -> i32 {
     match std::panic::catch_unwind(cli::run_quiet) {
         Ok(code) => code,

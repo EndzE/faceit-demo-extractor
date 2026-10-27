@@ -1,3 +1,5 @@
+//! Windows platform bindings for Shell operations, WinRT notifications, and console buffers.
+
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -32,17 +34,22 @@ const APP_AUMID: &str = "FaceitDemoExtractor";
 const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
 static APP_AUMID_REGISTERED: OnceLock<Result<(), Win32Error>> = OnceLock::new();
 
+/// Errors resulting from Windows API, Shell, or COM operations.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum Win32Error {
+    /// Windows system or COM HRESULT error.
     #[error("Windows API error: {0}")]
     Windows(#[source] windows::core::Error),
 
+    /// Standard I/O error.
     #[error("I/O error: {0}")]
     Io(#[source] Arc<std::io::Error>),
 
+    /// Registry access or modification error.
     #[error("registry error: {0}")]
     Registry(String),
 
+    /// Custom error message.
     #[error("{0}")]
     Custom(String),
 }
@@ -74,6 +81,11 @@ impl Drop for ComGuard {
     }
 }
 
+/// Moves the file at `path` to the Windows Recycle Bin using the Shell `IFileOperation` API.
+///
+/// # Errors
+///
+/// Returns a [`Win32Error`] if Shell file operation execution fails.
 pub fn recycle_file(path: &Path) -> Result<(), Win32Error> {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let normalized = strip_extended_prefix(&absolute);
@@ -135,6 +147,11 @@ pub fn recycle_file(path: &Path) -> Result<(), Win32Error> {
     result.map_err(Win32Error::from)
 }
 
+/// Clears the active Windows console screen buffer and returns the cursor to origin (0, 0).
+///
+/// # Errors
+///
+/// Returns a [`Win32Error`] if querying console buffer info or filling output fails.
 pub fn clear_console() -> Result<(), Win32Error> {
     // SAFETY: STD_OUTPUT_HANDLE retrieves the standard console handle without side effects.
     let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }?;
@@ -159,6 +176,11 @@ pub fn clear_console() -> Result<(), Win32Error> {
     Ok(())
 }
 
+/// Queries the total number of free bytes available to the caller on the disk containing `path`.
+///
+/// # Errors
+///
+/// Returns a [`Win32Error`] if `GetDiskFreeSpaceExW` fails.
 pub fn available_space(path: &Path) -> Result<u64, Win32Error> {
     let directory: Vec<u16> = path
         .as_os_str()
@@ -173,6 +195,8 @@ pub fn available_space(path: &Path) -> Result<u64, Win32Error> {
     Ok(available)
 }
 
+/// Expands `%VAR%` environment variable references within `value`.
+#[must_use]
 pub fn expand_env(value: &str) -> String {
     let source: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: `source` is null-terminated UTF-16; passing None queries the required buffer size.
@@ -256,10 +280,20 @@ fn push_quoted(target: &mut Vec<u16>, value: &OsStr) {
     target.push(u16::from(b'"'));
 }
 
+/// Spawns a new independent visible console process for `exe` with `args`.
+///
+/// # Errors
+///
+/// Returns a [`Win32Error`] if process creation fails.
 pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
     spawn_console(exe, args, false)
 }
 
+/// Spawns a new hidden process for `exe` with `args` with a suppressed window.
+///
+/// # Errors
+///
+/// Returns a [`Win32Error`] if process creation fails.
 pub fn spawn_hidden_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
     spawn_console(exe, args, true)
 }
@@ -360,6 +394,11 @@ fn create_toast_document(title: &str, message: &str) -> windows::core::Result<Xm
     Ok(document)
 }
 
+/// Dispatches a desktop toast notification with `title` and `message` using the WinRT API.
+///
+/// # Errors
+///
+/// Returns a [`Win32Error`] if AUMID registration, XML document creation, or toast display fails.
 pub fn notify(title: &str, message: &str) -> Result<(), Win32Error> {
     ensure_app_aumid()?;
 
@@ -396,10 +435,12 @@ fn show_message_box(title: &str, text: &str, icon: MESSAGEBOX_STYLE) {
     }
 }
 
+/// Displays a modal Windows error message box with an error icon.
 pub fn message_box(title: &str, text: &str) {
     show_message_box(title, text, MB_ICONERROR);
 }
 
+/// Displays a modal Windows informational message box with an info icon.
 pub fn message_box_info(title: &str, text: &str) {
     show_message_box(title, text, MB_ICONINFORMATION);
 }

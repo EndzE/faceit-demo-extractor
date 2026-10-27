@@ -1,3 +1,5 @@
+//! Counter-Strike 2 installation discovery via Windows Registry keys and filesystem conventions.
+
 use std::path::{Path, PathBuf};
 
 use winreg::RegKey;
@@ -6,6 +8,7 @@ use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY, RegType};
 
 use crate::win32::expand_env;
 
+/// Registry subkeys and value names checked when querying Counter-Strike 2 install location.
 pub const CS2_REG_LOOKUP: &[(&str, &str)] = &[
     (r"SOFTWARE\WOW6432Node\Valve\cs2", "installpath"),
     (
@@ -18,6 +21,7 @@ pub const CS2_REG_LOOKUP: &[(&str, &str)] = &[
     ),
 ];
 
+/// Relative path components from the CS2 root installation directory to the `csgo` folder.
 pub const CS2_CSGO_REL: &[&str] = &["game", "csgo"];
 
 fn decode_reg_string(raw: &RegValue) -> Option<String> {
@@ -41,6 +45,8 @@ fn decode_reg_string(raw: &RegValue) -> Option<String> {
     )
 }
 
+/// Reads and trims a string registry value under `HKEY_LOCAL_MACHINE` with 64-bit registry redirection.
+#[must_use]
 pub fn read_reg_string(subkey: &str, value_name: &str) -> Option<String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key = hklm
@@ -83,6 +89,10 @@ fn resolve_csgo_dir(path: &Path) -> PathBuf {
     nested
 }
 
+/// Resolves the CS2 `csgo` folder, evaluating user overrides or probing Windows Registry locations.
+///
+/// Returns a tuple containing the optional resolved folder path and a diagnostic description of the source.
+#[must_use]
 pub fn find_cs2_csgo_path(
     override_path: Option<&str>,
     base_dir: &Path,

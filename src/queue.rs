@@ -1,3 +1,5 @@
+//! Inter-process FIFO job queue and background worker process coordination.
+
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -34,26 +36,38 @@ impl Drop for WorkerModeGuard {
     }
 }
 
+/// Errors originating from Explorer context menu queue dispatch.
 #[derive(Debug, thiserror::Error)]
 pub enum ContextMenuError {
+    /// Invalid usage or missing arguments.
     #[error("{0}")]
     Usage(String),
+    /// System or I/O failure during queue manipulation.
     #[error("{0}")]
     Failure(String),
 }
 
+/// Errors originating from worker locking, process spawning, or queue directory preparation.
 #[derive(Debug, thiserror::Error)]
 pub enum QueueError {
+    /// Failure acquiring or unlocking an inter-process file lock.
     #[error("could not open the worker lock: {0}")]
     Lock(#[from] io::Error),
 
+    /// Worker executable could not be found next to the running process.
     #[error("faceit-dem.exe was not found next to this executable.\nExpected: {}", .0.display())]
     MissingExecutable(PathBuf),
 
+    /// Process creation failure while launching worker.
     #[error("could not spawn worker process: {0}")]
     Spawn(#[from] crate::win32::Win32Error),
 }
 
+/// Creates the shared queue directory on disk if it does not already exist.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if directory creation fails.
 pub fn ensure_queue_dir(paths: &Paths) -> io::Result<()> {
     fs::create_dir_all(&paths.queue_dir)
 }
@@ -160,13 +174,22 @@ fn queued_path_keys(paths: &Paths) -> io::Result<HashSet<Vec<u16>>> {
     Ok(keys)
 }
 
+/// Summary statistics of an enqueue operation.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct EnqueueOutcome {
+    /// Count of newly scheduled files written to the queue directory.
     pub queued: usize,
+    /// Count of files skipped because they are already present in the queue.
     pub duplicates: usize,
+    /// List of error messages for paths that could not be normalized or scheduled.
     pub failures: Vec<String>,
 }
 
+/// Enqueues a list of file paths into the temporary job queue directory.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if the queue directory cannot be accessed.
 pub fn enqueue_paths(paths: &Paths, files: &[OsString]) -> io::Result<EnqueueOutcome> {
     ensure_queue_dir(paths)?;
 
@@ -211,6 +234,7 @@ fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
 }
 
+/// Removes and returns currently pending job files from the queue directory in FIFO order.
 #[must_use]
 pub fn take_queue_files(paths: &Paths) -> Vec<PathBuf> {
     let Ok(directory) = fs::read_dir(&paths.queue_dir) else {
@@ -265,6 +289,7 @@ pub fn take_queue_files(paths: &Paths) -> Vec<PathBuf> {
     paths_out
 }
 
+/// Returns whether any pending job files currently exist in the queue directory.
 #[must_use]
 pub fn has_queued_files(paths: &Paths) -> bool {
     fs::read_dir(&paths.queue_dir)
@@ -283,11 +308,13 @@ fn discard_queued_files(paths: &Paths) {
     }
 }
 
+/// Collects and consumes queued files using default idle debouncing timeouts.
 #[must_use]
 pub fn collect_queued_files(paths: &Paths) -> Vec<PathBuf> {
     collect_queued_files_with_timing(paths, IDLE_WINDOW, Duration::ZERO, MAX_TOTAL)
 }
 
+/// Collects and consumes queued files using custom debounce and timeout durations.
 #[must_use]
 pub fn collect_queued_files_with_timing(
     paths: &Paths,
@@ -355,6 +382,11 @@ fn open_spawn_lock(paths: &Paths) -> io::Result<File> {
     open_lock_file(&paths.spawn_lock())
 }
 
+/// Attempts to acquire the exclusive worker lock without blocking.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if opening or locking the lockfile fails unexpectedly.
 pub fn try_acquire_worker_lock(paths: &Paths) -> io::Result<Option<File>> {
     let file = open_worker_lock(paths)?;
     match file.try_lock() {
@@ -377,6 +409,11 @@ fn acquire_worker_lock(paths: &Paths) -> io::Result<Option<File>> {
     }
 }
 
+/// Attempts to acquire the exclusive spawn lock without blocking.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if opening or locking the spawn lockfile fails.
 pub fn try_acquire_spawn_lock(paths: &Paths) -> io::Result<Option<File>> {
     let file = open_spawn_lock(paths)?;
     match file.try_lock() {
@@ -386,6 +423,11 @@ pub fn try_acquire_spawn_lock(paths: &Paths) -> io::Result<Option<File>> {
     }
 }
 
+/// Checks whether the worker lockfile is currently free (no active worker running).
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if checking the lock fails.
 pub fn is_worker_lock_free(paths: &Paths) -> io::Result<bool> {
     let Some(file) = try_acquire_worker_lock(paths)? else {
         return Ok(false);
@@ -394,6 +436,7 @@ pub fn is_worker_lock_free(paths: &Paths) -> io::Result<bool> {
     Ok(true)
 }
 
+/// Atomically writes the current process ID into `worker.pid`.
 pub fn write_worker_pid(paths: &Paths) {
     if let Err(err) = write_worker_pid_atomically(paths) {
         // INTENTIONAL: Writing worker PID is advisory for external status monitoring;
@@ -418,6 +461,7 @@ fn write_worker_pid_atomically(paths: &Paths) -> io::Result<()> {
     Ok(())
 }
 
+/// Reads the recorded worker process ID from `worker.pid` if it exists.
 #[must_use]
 pub fn read_worker_pid(paths: &Paths) -> Option<u32> {
     fs::read_to_string(paths.worker_pid())
@@ -427,6 +471,7 @@ pub fn read_worker_pid(paths: &Paths) -> Option<u32> {
         .ok()
 }
 
+/// Deletes the `worker.pid` file from the queue directory.
 pub fn cleanup_worker_pid(paths: &Paths) {
     // INTENTIONAL: Best-effort cleanup; file may not exist if never written or already removed.
     if let Err(err) = fs::remove_file(paths.worker_pid())
@@ -442,6 +487,11 @@ fn cleanup_own_worker_pid(paths: &Paths) {
     }
 }
 
+/// Returns a tuple indicating whether a worker is running and its PID if known.
+///
+/// # Errors
+///
+/// Returns a [`QueueError`] if inspecting the lockfile encounters an I/O error.
 pub fn worker_state(paths: &Paths) -> Result<(bool, Option<u32>), QueueError> {
     match is_worker_lock_free(paths) {
         Ok(true) => Ok((false, None)),
@@ -450,6 +500,11 @@ pub fn worker_state(paths: &Paths) -> Result<(bool, Option<u32>), QueueError> {
     }
 }
 
+/// Launches a new background worker process in either console or hidden window mode.
+///
+/// # Errors
+///
+/// Returns a [`QueueError`] if the executable cannot be located or process creation fails.
 pub fn spawn_worker(paths: &Paths) -> Result<(), QueueError> {
     let exe = paths.console_exe();
     if !exe.is_file() {
@@ -470,6 +525,7 @@ fn notify_worker_error(message: &str) {
     }
 }
 
+/// Formats CS2 console `playdemo <stem>` command strings for extracted demos.
 #[must_use]
 pub fn format_playdemo_commands(extracted: &[String]) -> String {
     let stems: Vec<&str> = extracted
@@ -509,6 +565,7 @@ pub fn format_playdemo_commands(extracted: &[String]) -> String {
     }
 }
 
+/// Generates the toast notification title and body text summarizing an extraction outcome.
 #[must_use]
 pub fn extraction_notification_content(outcome: &extract::ExtractOutcome) -> (String, String) {
     if outcome.exit_code == 130 {
@@ -586,6 +643,11 @@ fn combine_failure(failures: Option<String>, message: impl Into<String>) -> Cont
     }
 }
 
+/// Processes files passed via the `--context-menu` CLI flag, queuing them and ensuring a worker process runs.
+///
+/// # Errors
+///
+/// Returns a [`ContextMenuError`] if queuing fails or arguments are invalid.
 pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), ContextMenuError> {
     if files.is_empty() {
         return Err(ContextMenuError::Usage(
@@ -650,6 +712,7 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
     failure_result(partial_failures)
 }
 
+/// Main background queue worker loop, consuming pending job files until the queue remains idle.
 pub fn run_worker(paths: &Paths) -> i32 {
     let worker_mode = WorkerModeGuard::new();
     let notifications = config::load_config(&paths.config).notifications_instead_of_console;
