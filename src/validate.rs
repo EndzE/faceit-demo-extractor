@@ -14,6 +14,13 @@ pub const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "LPT8", "LPT9", "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³",
 ];
 
+#[inline]
+fn is_reserved_name(name: &str) -> bool {
+    WINDOWS_RESERVED_NAMES
+        .iter()
+        .any(|&reserved| reserved.eq_ignore_ascii_case(name))
+}
+
 pub fn utf16_len(value: &str) -> usize {
     value.encode_utf16().count()
 }
@@ -56,8 +63,7 @@ pub fn is_valid_filename(name: &str) -> bool {
         return false;
     }
 
-    let stem = stem.to_uppercase();
-    !WINDOWS_RESERVED_NAMES.contains(&stem.as_str())
+    !is_reserved_name(stem)
 }
 
 pub fn is_valid_delimiter(delim: &str) -> bool {
@@ -166,8 +172,8 @@ impl DemoFileName {
         }
 
         // Check for Windows reserved names in the primary stem
-        let first_part = stem.split('.').next().unwrap_or("").trim().to_uppercase();
-        if WINDOWS_RESERVED_NAMES.contains(&first_part.as_str()) {
+        let first_part = stem.split('.').next().unwrap_or("").trim();
+        if is_reserved_name(first_part) {
             stem = format!("_{stem}");
         }
 
@@ -182,8 +188,8 @@ impl DemoFileName {
         }
 
         // Re-check reserved names in case truncation exposed one
-        let first_part = stem.split('.').next().unwrap_or("").trim().to_uppercase();
-        if WINDOWS_RESERVED_NAMES.contains(&first_part.as_str()) {
+        let first_part = stem.split('.').next().unwrap_or("").trim();
+        if is_reserved_name(first_part) {
             stem = format!("_{stem}");
             while utf16_len(&stem) > max_stem_len {
                 stem.pop();
@@ -284,5 +290,33 @@ impl TryFrom<String> for DemoFileName {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::parse(&value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_reserved_name_case_insensitive() {
+        assert!(is_reserved_name("con"));
+        assert!(is_reserved_name("CON"));
+        assert!(is_reserved_name("cOn"));
+        assert!(is_reserved_name("prn"));
+        assert!(is_reserved_name("aux"));
+        assert!(is_reserved_name("nul"));
+        assert!(is_reserved_name("com1"));
+        assert!(is_reserved_name("COM9"));
+        assert!(is_reserved_name("lpt1"));
+        assert!(is_reserved_name("LPT9"));
+        assert!(is_reserved_name("clock$"));
+        assert!(is_reserved_name("conin$"));
+        assert!(is_reserved_name("conout$"));
+        assert!(is_reserved_name("COM¹"));
+        assert!(is_reserved_name("com¹"));
+
+        assert!(!is_reserved_name("con1"));
+        assert!(!is_reserved_name("normal"));
+        assert!(!is_reserved_name("com10"));
     }
 }
