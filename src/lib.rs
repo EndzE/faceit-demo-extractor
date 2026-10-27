@@ -1,3 +1,4 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
 #[cfg(not(windows))]
 compile_error!("faceit-dem is Windows-only.");
 

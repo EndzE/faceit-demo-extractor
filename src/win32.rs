@@ -48,6 +48,8 @@ pub fn recycle_file(path: &Path) -> Result<(), String> {
         lpszProgressTitle: PCWSTR::null(),
     };
 
+    // SAFETY: `operation` is a valid struct on the stack. `pFrom` points to `from`
+    // which is guaranteed to be double-null terminated and lives for the duration of the call.
     let result = unsafe { SHFileOperationW(&mut operation) };
 
     if operation.fAnyOperationsAborted.as_bool() {
@@ -66,21 +68,27 @@ pub fn recycle_file(path: &Path) -> Result<(), String> {
 }
 
 pub fn clear_console() -> Result<(), String> {
-    unsafe {
-        let handle = GetStdHandle(STD_OUTPUT_HANDLE).map_err(|err| err.to_string())?;
-        let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
-        GetConsoleScreenBufferInfo(handle, &mut info).map_err(|err| err.to_string())?;
+    // SAFETY: STD_OUTPUT_HANDLE retrieves the standard console handle without side effects.
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.map_err(|err| err.to_string())?;
 
-        let cells = info.dwSize.X.max(0) as u32 * info.dwSize.Y.max(0) as u32;
-        let home = COORD { X: 0, Y: 0 };
-        let mut written = 0u32;
+    let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+    // SAFETY: `handle` is queried above and `&mut info` points to a valid, aligned stack structure.
+    unsafe { GetConsoleScreenBufferInfo(handle, &mut info) }.map_err(|err| err.to_string())?;
 
-        FillConsoleOutputCharacterW(handle, u16::from(b' '), cells, home, &mut written)
-            .map_err(|err| err.to_string())?;
-        FillConsoleOutputAttribute(handle, info.wAttributes.0, cells, home, &mut written)
-            .map_err(|err| err.to_string())?;
-        SetConsoleCursorPosition(handle, home).map_err(|err| err.to_string())?;
-    }
+    let cells = (info.dwSize.X.max(0) as u32).saturating_mul(info.dwSize.Y.max(0) as u32);
+    let home = COORD { X: 0, Y: 0 };
+    let mut written = 0u32;
+
+    // SAFETY: `handle` is a valid console handle; `home` and `&mut written` are stack references.
+    unsafe { FillConsoleOutputCharacterW(handle, u16::from(b' '), cells, home, &mut written) }
+        .map_err(|err| err.to_string())?;
+
+    // SAFETY: `handle` is a valid console handle; `home` and `&mut written` are stack references.
+    unsafe { FillConsoleOutputAttribute(handle, info.wAttributes.0, cells, home, &mut written) }
+        .map_err(|err| err.to_string())?;
+
+    // SAFETY: `handle` is a valid console handle and `home` is a valid COORD value.
+    unsafe { SetConsoleCursorPosition(handle, home) }.map_err(|err| err.to_string())?;
 
     Ok(())
 }
@@ -93,22 +101,23 @@ pub fn available_space(path: &Path) -> Result<u64, String> {
         .collect();
     let mut available = 0u64;
 
-    unsafe {
-        GetDiskFreeSpaceExW(PCWSTR(directory.as_ptr()), Some(&mut available), None, None)
-            .map_err(|err| err.to_string())?;
-    }
+    // SAFETY: `directory` is null-terminated and valid for reads; `available` is a valid stack variable.
+    unsafe { GetDiskFreeSpaceExW(PCWSTR(directory.as_ptr()), Some(&mut available), None, None) }
+        .map_err(|err| err.to_string())?;
 
     Ok(available)
 }
 
 pub fn expand_env(value: &str) -> String {
     let source: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `source` is null-terminated UTF-16; passing None queries the required buffer size.
     let required = unsafe { ExpandEnvironmentStringsW(PCWSTR(source.as_ptr()), None) };
     if required == 0 {
         return value.to_string();
     }
 
     let mut buffer = vec![0u16; required as usize];
+    // SAFETY: `source` is null-terminated; `buffer` has allocated capacity matching `required`.
     let written = unsafe { ExpandEnvironmentStringsW(PCWSTR(source.as_ptr()), Some(&mut buffer)) };
     if written == 0 || written > required {
         return value.to_string();
@@ -178,6 +187,8 @@ fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), String> 
     }
     let mut process = PROCESS_INFORMATION::default();
 
+    // SAFETY: `application` and `command_line` are null-terminated wide strings;
+    // `startup` and `process` are properly initialized structs on the stack.
     unsafe {
         CreateProcessW(
             PCWSTR(application.as_ptr()),
@@ -191,11 +202,13 @@ fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), String> 
             &startup,
             &mut process,
         )
-        .map_err(|err| err.to_string())?;
-
-        let _ = CloseHandle(process.hProcess);
-        let _ = CloseHandle(process.hThread);
     }
+    .map_err(|err| err.to_string())?;
+
+    // SAFETY: `process.hProcess` is a valid handle returned by successful CreateProcessW.
+    let _ = unsafe { CloseHandle(process.hProcess) };
+    // SAFETY: `process.hThread` is a valid handle returned by successful CreateProcessW.
+    let _ = unsafe { CloseHandle(process.hThread) };
 
     Ok(())
 }
@@ -237,6 +250,7 @@ fn create_toast_document(title: &str, message: &str) -> windows::core::Result<Xm
 pub fn notify(title: &str, message: &str) -> Result<(), String> {
     ensure_app_aumid()?;
 
+    // SAFETY: Initializes COM for the current thread with multithreaded concurrency.
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
 
     let result = (|| -> windows::core::Result<()> {
@@ -250,6 +264,7 @@ pub fn notify(title: &str, message: &str) -> Result<(), String> {
     })();
 
     if initialized {
+        // SAFETY: Balances the successful CoInitializeEx call on the same thread.
         unsafe { CoUninitialize() };
     }
 
@@ -260,6 +275,7 @@ fn show_message_box(title: &str, text: &str, icon: MESSAGEBOX_STYLE) {
     let title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
     let text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
+    // SAFETY: `text` and `title` are null-terminated wide strings that outlive the call.
     unsafe {
         MessageBoxW(
             None,

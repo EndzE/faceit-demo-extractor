@@ -729,6 +729,7 @@ mod tests {
 
     impl Drop for NoReadHandle {
         fn drop(&mut self) {
+            // SAFETY: `self.0` is a valid open file handle created in `deny_read_sharing`.
             let _ = unsafe { CloseHandle(self.0) };
         }
     }
@@ -739,6 +740,7 @@ mod tests {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
+        // SAFETY: `wide` is null-terminated UTF-16; null security attributes and template handle are valid.
         let handle = unsafe {
             CreateFileW(
                 PCWSTR(wide.as_ptr()),
