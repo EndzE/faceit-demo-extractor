@@ -15,6 +15,7 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const BZIP2_MAGIC: &[u8; 3] = b"BZh";
 const BZIP2_BLOCK_MAGIC: [u8; 6] = [0x31, 0x41, 0x59, 0x26, 0x53, 0x59];
 const CONTENT_CHECKSUM_FLAG: u8 = 0x04;
+const MAX_ZSTD_BLOCK_SIZE: u64 = 128 * 1024;
 const COPY_BUFFER: usize = 1024 * 1024;
 const HEADER_BUFFER: usize = 64;
 const PARTIAL_PREFIX: &str = ".faceit-";
@@ -58,11 +59,13 @@ impl ArchiveFormat {
     }
 }
 
+#[derive(Debug)]
 struct ArchiveHeader {
     has_checksum: bool,
     content_size: Option<u64>,
 }
 
+#[derive(Debug)]
 enum HeaderError {
     Open(io::Error),
     Read(io::Error),
@@ -292,6 +295,14 @@ fn inspect_zstd_header(input: &Path) -> Result<ArchiveHeader, HeaderError> {
                 let last = block & 1 != 0;
                 let block_type = (block >> 1) & 0x03;
                 let block_size = u64::from(block >> 3);
+                if block_type == 0 && block_size == 0 && !last {
+                    return Err(HeaderError::Format("empty non-terminal raw block detected"));
+                }
+                if block_size > MAX_ZSTD_BLOCK_SIZE {
+                    return Err(HeaderError::Format(
+                        "block size exceeds maximum allowed Zstandard block size (128 KB)",
+                    ));
+                }
                 match block_type {
                     0 | 2 => skip_exact(&mut reader, block_size)?,
                     1 => skip_exact(&mut reader, 1)?,
@@ -1364,5 +1375,52 @@ mod tests {
             uncompressed_demo_name(Path::new(r"C:\demos\MATCH.DEM.ZST")),
             "MATCH.DEM"
         );
+    }
+
+    #[test]
+    fn inspect_zstd_header_rejects_empty_non_terminal_raw_block() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("empty_raw_block.dem.zst");
+
+        let mut bytes = ZSTD_MAGIC.to_vec();
+        bytes.push(0x20);
+        bytes.push(0x00);
+        bytes.extend_from_slice(&[0x00, 0x00, 0x00]);
+        let terminal_block = 1u32 | (1u32 << 3);
+        bytes.extend_from_slice(&terminal_block.to_le_bytes()[..3]);
+        bytes.push(0x42);
+
+        fs::write(&input, bytes).unwrap();
+
+        match inspect_zstd_header(&input) {
+            Err(HeaderError::Format(msg)) => {
+                assert_eq!(msg, "empty non-terminal raw block detected");
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inspect_zstd_header_rejects_block_size_exceeding_128kb() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("oversized_block.dem.zst");
+
+        let mut bytes = ZSTD_MAGIC.to_vec();
+        bytes.push(0x20);
+        bytes.push(0x00);
+        let oversized_block = 1u32 | ((128 * 1024 + 1) << 3);
+        bytes.extend_from_slice(&oversized_block.to_le_bytes()[..3]);
+
+        fs::write(&input, bytes).unwrap();
+
+        match inspect_zstd_header(&input) {
+            Err(HeaderError::Format(msg)) => {
+                assert_eq!(
+                    msg,
+                    "block size exceeds maximum allowed Zstandard block size (128 KB)"
+                );
+            }
+            other => panic!("expected Format error, got {other:?}"),
+        }
     }
 }
