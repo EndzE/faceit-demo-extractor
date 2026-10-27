@@ -857,18 +857,15 @@ pub fn delete_original(path: &Path, use_recycle_bin: bool) -> Result<(), DeleteO
     }
 }
 
-pub fn split_ext(name: &str) -> (String, String) {
-    let base_start = name.rfind(['\\', '/']).map(|index| index + 1).unwrap_or(0);
+#[must_use]
+pub fn split_ext(name: &str) -> (&str, &str) {
+    let base_start = name.rfind(['\\', '/']).map_or(0, |index| index + 1);
     let base = &name[base_start..];
 
-    let Some(dot) = base.rfind('.') else {
-        return (name.to_string(), String::new());
-    };
-    if dot == 0 {
-        return (name.to_string(), String::new());
+    match base.rfind('.') {
+        Some(dot) if dot > 0 => (&base[..dot], &base[dot..]),
+        _ => (base, ""),
     }
-
-    (base[..dot].to_string(), base[dot..].to_string())
 }
 
 pub fn uncompressed_demo_name(input: &Path) -> DemoFileName {
@@ -878,15 +875,14 @@ pub fn uncompressed_demo_name(input: &Path) -> DemoFileName {
         .unwrap_or_else(|| "demo.dem".to_string());
 
     let (stem, ext) = split_ext(&file_name);
-    let lower_ext = ext.to_ascii_lowercase();
-    let name = if lower_ext == ".zst" || lower_ext == ".bz2" {
+    let name = if ext.eq_ignore_ascii_case(".zst") || ext.eq_ignore_ascii_case(".bz2") {
         stem
     } else {
-        file_name
+        &file_name
     };
 
     let candidate = if name.to_ascii_lowercase().ends_with(".dem") {
-        name
+        name.to_string()
     } else {
         format!("{name}.dem")
     };
@@ -1054,7 +1050,7 @@ pub fn run_extract_batch_outcome(
                     natural
                 } else {
                     let (stem, ext) = split_ext(natural.as_str());
-                    let candidate = next_free_name(csgo, stem, &ext, &config.delimiter);
+                    let candidate = next_free_name(csgo, stem.to_string(), ext, &config.delimiter);
                     match DemoFileName::parse(&candidate) {
                         Ok(valid) => valid,
                         Err(_) => DemoFileName::sanitize(&candidate),
@@ -1069,7 +1065,7 @@ pub fn run_extract_batch_outcome(
                     natural
                 } else {
                     let (stem, ext) = split_ext(natural.as_str());
-                    let candidate = next_free_name(csgo, stem, &ext, &config.delimiter);
+                    let candidate = next_free_name(csgo, stem.to_string(), ext, &config.delimiter);
                     match DemoFileName::parse(&candidate) {
                         Ok(valid) => valid,
                         Err(_) => DemoFileName::sanitize(&candidate),
@@ -1084,7 +1080,7 @@ pub fn run_extract_batch_outcome(
                     Err(_) => DemoFileName::sanitize(target),
                 }
             } else {
-                let candidate = next_free_name(csgo, stem.clone(), &ext, &config.delimiter);
+                let candidate = next_free_name(csgo, stem.to_string(), ext, &config.delimiter);
                 match DemoFileName::parse(&candidate) {
                     Ok(valid) => valid,
                     Err(_) => DemoFileName::sanitize(&candidate),
@@ -1095,7 +1091,7 @@ pub fn run_extract_batch_outcome(
                 "{}",
                 output::title(format!("[{}/{}] {}", index + 1, total, input.display()))
             );
-            let candidate = next_free_name(csgo, stem.clone(), &ext, &config.delimiter);
+            let candidate = next_free_name(csgo, stem.to_string(), ext, &config.delimiter);
             match DemoFileName::parse(&candidate) {
                 Ok(valid) => valid,
                 Err(_) => DemoFileName::sanitize(&candidate),
@@ -1151,7 +1147,7 @@ pub fn run_extract_batch_outcome(
     }
 
     if !extracted.is_empty() {
-        let stems: Vec<String> = extracted.iter().map(|name| split_ext(name).0).collect();
+        let stems: Vec<&str> = extracted.iter().map(|name| split_ext(name).0).collect();
 
         println!();
         println!("{}", output::section("Play in CS2"));

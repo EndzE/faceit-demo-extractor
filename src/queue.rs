@@ -466,7 +466,7 @@ fn notify_worker_error(message: &str) {
 }
 
 pub fn format_playdemo_commands(extracted: &[String]) -> String {
-    let stems: Vec<String> = extracted
+    let stems: Vec<&str> = extracted
         .iter()
         .map(|name| extract::split_ext(name).0)
         .collect();

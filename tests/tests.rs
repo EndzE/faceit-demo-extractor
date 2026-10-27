@@ -209,23 +209,13 @@ fn demo_file_name_sanitization() {
 
 #[test]
 fn split_ext_splits_extension() {
-    assert_eq!(
-        extract::split_ext("1.dem"),
-        ("1".to_string(), ".dem".to_string())
-    );
-    assert_eq!(
-        extract::split_ext("a.b.c"),
-        ("a.b".to_string(), ".c".to_string())
-    );
-    assert_eq!(
-        extract::split_ext("demo"),
-        ("demo".to_string(), String::new())
-    );
-    assert_eq!(
-        extract::split_ext(".dem"),
-        (".dem".to_string(), String::new())
-    );
-    assert_eq!(extract::split_ext("1."), ("1".to_string(), ".".to_string()));
+    assert_eq!(extract::split_ext("1.dem"), ("1", ".dem"));
+    assert_eq!(extract::split_ext("a.b.c"), ("a.b", ".c"));
+    assert_eq!(extract::split_ext("demo"), ("demo", ""));
+    assert_eq!(extract::split_ext(".dem"), (".dem", ""));
+    assert_eq!(extract::split_ext("1."), ("1", "."));
+    assert_eq!(extract::split_ext("dir/sub/demo.dem"), ("demo", ".dem"));
+    assert_eq!(extract::split_ext("dir\\sub\\demo"), ("demo", ""));
 }
 
 #[test]
