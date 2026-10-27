@@ -59,7 +59,7 @@ pub fn ensure_queue_dir(paths: &Paths) -> io::Result<()> {
 }
 
 fn is_path_padding(unit: u16) -> bool {
-    unit == '"' as u16 || unit <= 0x20
+    unit == u16::from(b'"') || unit <= 0x20
 }
 
 fn normalize_path(file: &OsStr) -> Option<PathBuf> {

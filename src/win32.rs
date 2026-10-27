@@ -233,27 +233,27 @@ fn strip_extended_prefix(path: &Path) -> PathBuf {
 }
 
 fn push_quoted(target: &mut Vec<u16>, value: &OsStr) {
-    target.push('"' as u16);
+    target.push(u16::from(b'"'));
 
     let mut backslashes = 0;
     for unit in value.encode_wide() {
-        if unit == '\\' as u16 {
+        if unit == u16::from(b'\\') {
             backslashes += 1;
             continue;
         }
 
-        if unit == '"' as u16 {
-            target.extend(std::iter::repeat_n('\\' as u16, backslashes * 2 + 1));
-            target.push('"' as u16);
+        if unit == u16::from(b'"') {
+            target.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2 + 1));
+            target.push(u16::from(b'"'));
         } else {
-            target.extend(std::iter::repeat_n('\\' as u16, backslashes));
+            target.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes));
             target.push(unit);
         }
         backslashes = 0;
     }
 
-    target.extend(std::iter::repeat_n('\\' as u16, backslashes * 2));
-    target.push('"' as u16);
+    target.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2));
+    target.push(u16::from(b'"'));
 }
 
 pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
@@ -274,7 +274,7 @@ fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), Win32Err
     let mut command_line: Vec<u16> = Vec::new();
     push_quoted(&mut command_line, exe.as_os_str());
     for arg in args {
-        command_line.push(' ' as u16);
+        command_line.push(u16::from(b' '));
         push_quoted(&mut command_line, OsStr::new(arg));
     }
     command_line.push(0);
@@ -455,7 +455,7 @@ mod tests {
         let mut buffer = Vec::new();
         push_quoted(&mut buffer, path.as_os_str());
 
-        assert_eq!(buffer, vec!['"' as u16, 0xD800, '"' as u16]);
+        assert_eq!(buffer, vec![u16::from(b'"'), 0xD800, u16::from(b'"')]);
     }
 
     #[test]
