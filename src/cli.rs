@@ -309,7 +309,7 @@ pub fn status_lines_for(paths: &Paths, menus: &[registry::ContextMenu]) -> Vec<S
     ));
 
     for menu in menus {
-        if !menu.installed() {
+        if !menu.is_installed() {
             if menu_state == Some(false) {
                 lines.push(output::field(
                     &format!("Menu {}", menu.extension),
@@ -386,7 +386,7 @@ fn menu_install(paths: &Paths) {
 }
 
 fn menu_remove() {
-    if !registry::context_menu_installed() {
+    if !registry::is_context_menu_installed() {
         println!(
             "  {}",
             output::muted("The right-click menu is not installed.")
@@ -524,7 +524,7 @@ fn menu_toggle_rename_demo(paths: &Paths) {
                 );
             }
 
-            if registry::context_menu_installed() {
+            if registry::is_context_menu_installed() {
                 println!();
                 let Some(answer) = read_line("  Update the right-click menu text? [y/N]: ") else {
                     return;

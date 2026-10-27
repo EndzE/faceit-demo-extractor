@@ -50,7 +50,7 @@ pub struct ContextMenu {
 
 impl ContextMenu {
     #[must_use]
-    pub fn installed(&self) -> bool {
+    pub fn is_installed(&self) -> bool {
         reg_key_exists(self.key)
     }
 
@@ -106,18 +106,18 @@ pub fn context_menu_command() -> Option<String> {
 }
 
 #[must_use]
-pub fn context_menu_installed() -> bool {
-    CTX_MENUS.iter().any(ContextMenu::installed)
+pub fn is_context_menu_installed() -> bool {
+    CTX_MENUS.iter().any(ContextMenu::is_installed)
 }
 
 #[must_use]
 pub fn context_menu_state_for(menus: &[ContextMenu], paths: &Paths) -> Option<bool> {
-    if !menus.iter().any(ContextMenu::installed) {
+    if !menus.iter().any(ContextMenu::is_installed) {
         return None;
     }
     let expected_command = build_context_menu_command(paths);
     Some(menus.iter().all(|menu| {
-        menu.installed()
+        menu.is_installed()
             && menu.label().is_some()
             && menu.command().as_deref() == Some(&expected_command)
     }))
@@ -207,7 +207,7 @@ pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), Registry
 
 pub fn perform_update_label(paths: &Paths) -> Result<(), RegistryError> {
     let mut any_installed = false;
-    for menu in CTX_MENUS.iter().filter(|menu| menu.installed()) {
+    for menu in CTX_MENUS.iter().filter(|menu| menu.is_installed()) {
         any_installed = true;
         perform_update_label_at(paths, menu.key)?;
     }

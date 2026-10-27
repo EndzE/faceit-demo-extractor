@@ -386,7 +386,7 @@ pub fn try_acquire_spawn_lock(paths: &Paths) -> io::Result<Option<File>> {
     }
 }
 
-pub fn worker_lock_is_free(paths: &Paths) -> io::Result<bool> {
+pub fn is_worker_lock_free(paths: &Paths) -> io::Result<bool> {
     let Some(file) = try_acquire_worker_lock(paths)? else {
         return Ok(false);
     };
@@ -443,7 +443,7 @@ fn cleanup_own_worker_pid(paths: &Paths) {
 }
 
 pub fn worker_state(paths: &Paths) -> Result<(bool, Option<u32>), QueueError> {
-    match worker_lock_is_free(paths) {
+    match is_worker_lock_free(paths) {
         Ok(true) => Ok((false, None)),
         Ok(false) => Ok((true, read_worker_pid(paths))),
         Err(err) => Err(QueueError::Lock(err)),
@@ -615,7 +615,7 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
         }
     };
 
-    match worker_lock_is_free(paths) {
+    match is_worker_lock_free(paths) {
         Ok(true) => {}
         Ok(false) => return failure_result(partial_failures),
         Err(err) => {

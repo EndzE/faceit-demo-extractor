@@ -1270,11 +1270,11 @@ fn worker_lock_is_exclusive_and_released_on_drop() {
     let lock = queue::try_acquire_worker_lock(&paths)
         .unwrap()
         .expect("first lock");
-    assert!(!queue::worker_lock_is_free(&paths).unwrap());
+    assert!(!queue::is_worker_lock_free(&paths).unwrap());
     assert!(queue::try_acquire_worker_lock(&paths).unwrap().is_none());
 
     drop(lock);
-    assert!(queue::worker_lock_is_free(&paths).unwrap());
+    assert!(queue::is_worker_lock_free(&paths).unwrap());
 }
 
 #[test]
@@ -1344,7 +1344,7 @@ fn worker_breaks_cleanly_when_handoff_lock_is_lost() {
 
     assert!(
         wait_until(
-            || queue::worker_lock_is_free(&paths).unwrap_or(false),
+            || queue::is_worker_lock_free(&paths).unwrap_or(false),
             Duration::from_secs(5)
         ),
         "the worker lock did not become free"
@@ -1421,7 +1421,7 @@ fn worker_processes_queued_batches_under_continuous_lock() {
     let exit_code = worker.join().unwrap();
     assert_eq!(exit_code, 0);
 
-    assert!(queue::worker_lock_is_free(&paths).unwrap());
+    assert!(queue::is_worker_lock_free(&paths).unwrap());
     assert_eq!(queue::read_worker_pid(&paths), None);
 }
 
@@ -1485,7 +1485,7 @@ fn worker_lock_errors_are_reported() {
     fs::create_dir_all(paths.queue_dir.join("worker.lock")).unwrap();
 
     assert!(queue::try_acquire_worker_lock(&paths).is_err());
-    assert!(queue::worker_lock_is_free(&paths).is_err());
+    assert!(queue::is_worker_lock_free(&paths).is_err());
     assert!(queue::worker_state(&paths).is_err());
 
     let target = directory.path().join("demo.zst");
@@ -1693,7 +1693,7 @@ fn context_menu_quiet_worker_end_to_end() {
     assert!(input.exists());
     assert!(
         wait_until(
-            || queue::worker_lock_is_free(&paths).unwrap_or(false),
+            || queue::is_worker_lock_free(&paths).unwrap_or(false),
             Duration::from_secs(10)
         ),
         "the worker did not finish"
@@ -1765,7 +1765,7 @@ fn context_menu_quiet_worker_with_notifications_batch_extraction() {
     assert!(extracted.contains(&payload2));
     assert!(
         wait_until(
-            || queue::worker_lock_is_free(&paths).unwrap_or(false),
+            || queue::is_worker_lock_free(&paths).unwrap_or(false),
             Duration::from_secs(10)
         ),
         "the worker did not finish"
@@ -2018,9 +2018,11 @@ fn context_menu_state_detects_moved_executable_and_missing_label() {
     }];
 
     assert_eq!(registry::context_menu_state_for(test_menus, &paths), None);
+    assert!(!test_menus[0].is_installed());
 
     let expected = registry::build_context_menu_command(&paths);
     registry::install_context_menu_at(REGISTRY_STATE_TEST_KEY, "Test Label", &expected).unwrap();
+    assert!(test_menus[0].is_installed());
     assert_eq!(
         registry::context_menu_state_for(test_menus, &paths),
         Some(true)
