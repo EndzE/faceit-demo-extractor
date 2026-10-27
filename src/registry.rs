@@ -49,19 +49,23 @@ pub struct ContextMenu {
 }
 
 impl ContextMenu {
+    #[must_use]
     pub fn installed(&self) -> bool {
         reg_key_exists(self.key)
     }
 
+    #[must_use]
     pub fn label(&self) -> Option<String> {
         reg_default(self.key)
     }
 
+    #[must_use]
     pub fn command(&self) -> Option<String> {
         reg_default(self.command_key)
     }
 }
 
+#[must_use]
 pub fn menu_label_for(target_filename: &str) -> String {
     format!("Extract to CS2 folder ({target_filename})")
 }
@@ -79,6 +83,7 @@ pub fn ensure_install_binaries(paths: &Paths) -> Result<(), RegistryError> {
     Ok(())
 }
 
+#[must_use]
 pub fn build_context_menu_command(paths: &Paths) -> String {
     format!("\"{}\" --context-menu \"%1\"", paths.quiet_exe().display())
 }
@@ -95,14 +100,17 @@ fn reg_key_exists(subkey: &str) -> bool {
         .is_ok()
 }
 
+#[must_use]
 pub fn context_menu_command() -> Option<String> {
     CTX_MENUS.iter().find_map(ContextMenu::command)
 }
 
+#[must_use]
 pub fn context_menu_installed() -> bool {
     CTX_MENUS.iter().any(ContextMenu::installed)
 }
 
+#[must_use]
 pub fn context_menu_state_for(menus: &[ContextMenu], paths: &Paths) -> Option<bool> {
     if !menus.iter().any(ContextMenu::installed) {
         return None;
@@ -118,6 +126,7 @@ pub fn context_menu_state_for(menus: &[ContextMenu], paths: &Paths) -> Option<bo
 /// Overall right-click state: `None` when no menu is installed, `Some(true)`
 /// when every menu is installed with a command and label matching the current paths,
 /// `Some(false)` when at least one installed menu needs repair.
+#[must_use]
 pub fn context_menu_state(paths: &Paths) -> Option<bool> {
     context_menu_state_for(CTX_MENUS, paths)
 }

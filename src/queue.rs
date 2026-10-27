@@ -211,6 +211,7 @@ fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
 }
 
+#[must_use]
 pub fn take_queue_files(paths: &Paths) -> Vec<PathBuf> {
     let Ok(directory) = fs::read_dir(&paths.queue_dir) else {
         return Vec::new();
@@ -264,6 +265,7 @@ pub fn take_queue_files(paths: &Paths) -> Vec<PathBuf> {
     paths_out
 }
 
+#[must_use]
 pub fn has_queued_files(paths: &Paths) -> bool {
     fs::read_dir(&paths.queue_dir)
         .map(|directory| directory.flatten().any(|entry| is_path_file(&entry.path())))
@@ -281,10 +283,12 @@ fn discard_queued_files(paths: &Paths) {
     }
 }
 
+#[must_use]
 pub fn collect_queued_files(paths: &Paths) -> Vec<PathBuf> {
     collect_queued_files_with_timing(paths, IDLE_WINDOW, Duration::ZERO, MAX_TOTAL)
 }
 
+#[must_use]
 pub fn collect_queued_files_with_timing(
     paths: &Paths,
     idle: Duration,
@@ -414,6 +418,7 @@ fn write_worker_pid_atomically(paths: &Paths) -> io::Result<()> {
     Ok(())
 }
 
+#[must_use]
 pub fn read_worker_pid(paths: &Paths) -> Option<u32> {
     fs::read_to_string(paths.worker_pid())
         .ok()?
@@ -465,6 +470,7 @@ fn notify_worker_error(message: &str) {
     }
 }
 
+#[must_use]
 pub fn format_playdemo_commands(extracted: &[String]) -> String {
     let stems: Vec<&str> = extracted
         .iter()
@@ -503,6 +509,7 @@ pub fn format_playdemo_commands(extracted: &[String]) -> String {
     }
 }
 
+#[must_use]
 pub fn extraction_notification_content(outcome: &extract::ExtractOutcome) -> (String, String) {
     if outcome.exit_code == 130 {
         return (

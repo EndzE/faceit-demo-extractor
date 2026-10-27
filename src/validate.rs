@@ -21,10 +21,12 @@ fn is_reserved_name(name: &str) -> bool {
         .any(|&reserved| reserved.eq_ignore_ascii_case(name))
 }
 
+#[must_use]
 pub fn utf16_len(value: &str) -> usize {
     value.encode_utf16().count()
 }
 
+#[must_use]
 pub fn is_valid_demo_filename(name: &str) -> bool {
     is_valid_filename(name)
         && name
@@ -32,6 +34,7 @@ pub fn is_valid_demo_filename(name: &str) -> bool {
             .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("dem"))
 }
 
+#[must_use]
 pub fn is_valid_filename(name: &str) -> bool {
     if name.is_empty() || name == "." || name == ".." {
         return false;
@@ -66,6 +69,7 @@ pub fn is_valid_filename(name: &str) -> bool {
     !is_reserved_name(stem)
 }
 
+#[must_use]
 pub fn is_valid_delimiter(delim: &str) -> bool {
     if delim.is_empty() {
         return true;
@@ -125,6 +129,7 @@ impl DemoFileName {
     /// Strips directory paths, replaces illegal or reserved Windows characters with underscores,
     /// prefixes reserved DOS device names with an underscore (e.g. `CON.dem` becomes `_CON.dem`),
     /// ensures a `.dem` extension, and enforces length bounds.
+    #[must_use]
     pub fn sanitize(raw: &str) -> Self {
         let trimmed = raw.trim();
         if is_valid_demo_filename(trimmed) {
@@ -204,10 +209,12 @@ impl DemoFileName {
         }
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.0
     }

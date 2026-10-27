@@ -887,6 +887,7 @@ pub fn split_ext(name: &str) -> (&str, &str) {
     }
 }
 
+#[must_use]
 pub fn uncompressed_demo_name(input: &Path) -> DemoFileName {
     let file_name = input
         .file_name()
