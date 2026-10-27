@@ -12,6 +12,8 @@ pub mod registry;
 pub mod validate;
 pub mod win32;
 
+pub use crate::validate::DemoFileName;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 

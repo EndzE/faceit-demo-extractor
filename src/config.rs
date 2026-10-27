@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::{Map, Value};
 
 use crate::output::{self, warn};
-use crate::validate::{is_valid_delimiter, is_valid_demo_filename};
+use crate::validate::{DemoFileName, is_valid_delimiter};
 use crate::{
     DEFAULT_DELIMITER, DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN,
     DEFAULT_NOTIFICATIONS_INSTEAD_OF_CONSOLE, DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
@@ -112,9 +112,8 @@ pub fn load_config(path: &Path) -> Config {
 
     match &name_value {
         Value::String(name) => {
-            let trimmed = name.trim();
-            if is_valid_demo_filename(trimmed) {
-                config.target_filename = trimmed.to_string();
+            if let Ok(valid) = DemoFileName::parse(name) {
+                config.target_filename = valid.into_inner();
             } else {
                 warn_config_once(
                     "target_filename",

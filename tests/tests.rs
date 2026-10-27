@@ -16,7 +16,9 @@ use faceit_demo_extractor::cs2;
 use faceit_demo_extractor::extract::{self, ExtractResult};
 use faceit_demo_extractor::queue;
 use faceit_demo_extractor::registry;
-use faceit_demo_extractor::validate::{is_valid_demo_filename, is_valid_filename, utf16_len};
+use faceit_demo_extractor::validate::{
+    DemoFileName, is_valid_demo_filename, is_valid_filename, utf16_len,
+};
 use faceit_demo_extractor::{DEMO_MAGIC, HOME_ENV, MAX_FILENAME_LEN, Paths};
 
 fn archive_bytes(payload: &[u8], checksum: bool) -> Vec<u8> {
@@ -126,6 +128,83 @@ fn demo_filename_validation_requires_dem_extension() {
     assert!(!is_valid_demo_filename("con.dem"));
     assert!(!is_valid_demo_filename(" 1.dem"));
     assert!(!is_valid_demo_filename("1.dem "));
+}
+
+#[test]
+fn demo_file_name_parse_and_traits() {
+    use std::str::FromStr;
+
+    // Valid inputs
+    let dfn = DemoFileName::parse("1.dem").unwrap();
+    assert_eq!(dfn.as_str(), "1.dem");
+    assert_eq!(dfn, "1.dem");
+    assert_eq!("1.dem", dfn);
+    assert_eq!(dfn, String::from("1.dem"));
+    assert_eq!(String::from("1.dem"), dfn);
+    assert_eq!(format!("{dfn}"), "1.dem");
+    let path_ref: &Path = dfn.as_ref();
+    assert_eq!(path_ref, Path::new("1.dem"));
+    let str_ref: &str = dfn.as_ref();
+    assert_eq!(str_ref, "1.dem");
+    assert_eq!(DemoFileName::from_str("1.dem").unwrap(), "1.dem");
+    assert_eq!(DemoFileName::try_from("1.dem").unwrap(), "1.dem");
+    assert_eq!(
+        DemoFileName::try_from(String::from("1.dem")).unwrap(),
+        "1.dem"
+    );
+
+    // Whitespace trimming during parse
+    assert_eq!(DemoFileName::parse("  match.dem  ").unwrap(), "match.dem");
+
+    // Invalid extensions
+    assert!(DemoFileName::parse("1.txt").is_err());
+    assert!(DemoFileName::parse("match").is_err());
+
+    // Reserved Windows names
+    assert!(DemoFileName::parse("con.dem").is_err());
+    assert!(DemoFileName::parse("CON.DEM").is_err());
+    assert!(DemoFileName::parse("prn.dem").is_err());
+    assert!(DemoFileName::parse("aux.dem").is_err());
+    assert!(DemoFileName::parse("nul.dem").is_err());
+    assert!(DemoFileName::parse("com1.dem").is_err());
+    assert!(DemoFileName::parse("lpt1.dem").is_err());
+    assert!(DemoFileName::parse("clock$.dem").is_err());
+
+    // Alternate Data Streams / invalid characters
+    assert!(DemoFileName::parse("match.dem:stream.dem").is_err());
+    assert!(DemoFileName::parse("bad<name>.dem").is_err());
+    assert!(DemoFileName::parse("bad|name.dem").is_err());
+    assert!(DemoFileName::parse("bad?name.dem").is_err());
+    assert!(DemoFileName::parse("bad*name.dem").is_err());
+}
+
+#[test]
+fn demo_file_name_sanitization() {
+    // Reserved names
+    assert_eq!(DemoFileName::sanitize("con.dem"), "_con.dem");
+    assert_eq!(DemoFileName::sanitize("CON.DEM"), "_CON.DEM");
+    assert_eq!(DemoFileName::sanitize("nul.dem"), "_nul.dem");
+    assert_eq!(DemoFileName::sanitize("aux.dem"), "_aux.dem");
+    assert_eq!(DemoFileName::sanitize("com1.dem"), "_com1.dem");
+    assert_eq!(DemoFileName::sanitize("clock$.dem"), "_clock$.dem");
+
+    // Colons and illegal characters
+    assert_eq!(
+        DemoFileName::sanitize("match.dem:stream.dem"),
+        "match.dem_stream.dem"
+    );
+    assert_eq!(DemoFileName::sanitize("bad<name>?.dem"), "bad_name__.dem");
+
+    // Empty and whitespace
+    assert_eq!(DemoFileName::sanitize(""), "demo.dem");
+    assert_eq!(DemoFileName::sanitize("   "), "demo.dem");
+    assert_eq!(DemoFileName::sanitize(":::"), "___.dem");
+
+    // Non-.dem extension gets .dem appended
+    assert_eq!(DemoFileName::sanitize("match.txt"), "match.txt.dem");
+
+    // Already valid names remain untouched
+    assert_eq!(DemoFileName::sanitize("match-12345.dem"), "match-12345.dem");
 }
 
 #[test]
@@ -819,6 +898,49 @@ fn extraction_preserves_original_names_when_rename_demo_is_false() {
         fs::read(csgo.join("match_alpha_1.dem")).unwrap(),
         payload1_new
     );
+}
+
+#[test]
+fn extraction_handles_reserved_device_names_when_rename_demo_is_false() {
+    let directory = tempfile::tempdir().unwrap();
+    let csgo = directory.path().join("csgo");
+    fs::create_dir(&csgo).unwrap();
+
+    let input_con = directory.path().join("CON.dem.zst");
+    let input_nul = directory.path().join("nul.dem.zst");
+    let payload_con = demo_payload(512);
+    let payload_nul = demo_payload(1024);
+    write_archive(&input_con, &payload_con, true);
+    write_archive(&input_nul, &payload_nul, true);
+
+    let mut config = Config::defaults();
+    config.rename_demo = false;
+
+    // Batch extraction with reserved Windows DOS device names:
+    // Should sanitize them to safe filenames (e.g. _CON.dem, _nul.dem)
+    // rather than hanging or attempting to write to DOS devices.
+    let code = extract::run_extract_batch(&[input_con, input_nul], &csgo, "test", &config, false);
+    assert_eq!(code, 0);
+    assert!(csgo.join("_CON.dem").exists());
+    assert!(csgo.join("_nul.dem").exists());
+    assert_eq!(fs::read(csgo.join("_CON.dem")).unwrap(), payload_con);
+    assert_eq!(fs::read(csgo.join("_nul.dem")).unwrap(), payload_nul);
+}
+
+#[test]
+fn extract_one_rejects_reserved_or_invalid_device_name_in_output_path() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("input.dem.zst");
+    let payload = demo_payload(512);
+    write_archive(&input, &payload, true);
+
+    let output_con = directory.path().join("CON.dem");
+    let result = extract::extract_one(&input, &output_con, false, false);
+    assert_eq!(result, ExtractResult::Failed);
+
+    let output_colon = directory.path().join("match.dem:stream.dem");
+    let result = extract::extract_one(&input, &output_colon, false, false);
+    assert_eq!(result, ExtractResult::Failed);
 }
 
 #[test]
