@@ -502,11 +502,11 @@ fn decode_archive(
     writer: &mut impl Write,
     content_size: Option<u64>,
     head: &mut Vec<u8>,
+    buffer: &mut [u8],
 ) -> Result<u64, CopyError> {
     let file = File::open(input).map_err(|err| CopyError::Open(err.to_string()))?;
     let reader = BufReader::with_capacity(COPY_BUFFER, file);
 
-    let mut buffer = vec![0u8; COPY_BUFFER];
     let mut total = 0;
     let mut progress = output::Progress::new(content_size);
     progress.update(0);
@@ -519,7 +519,7 @@ fn decode_archive(
                 &mut decoder,
                 format,
                 writer,
-                &mut buffer,
+                buffer,
                 head,
                 &mut total,
                 &mut progress,
@@ -536,7 +536,7 @@ fn decode_archive(
                 &mut decoder,
                 format,
                 writer,
-                &mut buffer,
+                buffer,
                 head,
                 &mut total,
                 &mut progress,
@@ -587,6 +587,17 @@ pub fn extract_one(
     output: &Path,
     keep_zst: bool,
     move_to_recycle_bin: bool,
+) -> ExtractResult {
+    let mut buffer = vec![0u8; COPY_BUFFER];
+    extract_one_with_buffer(input, output, keep_zst, move_to_recycle_bin, &mut buffer)
+}
+
+pub fn extract_one_with_buffer(
+    input: &Path,
+    output: &Path,
+    keep_zst: bool,
+    move_to_recycle_bin: bool,
+    buffer: &mut [u8],
 ) -> ExtractResult {
     if !input.is_file() {
         error(format!("input file not found: {}", input.display()));
@@ -664,7 +675,7 @@ pub fn extract_one(
     let mut head = Vec::with_capacity(DEMO_MAGIC.len());
     let copy_result = {
         let mut writer = BufWriter::with_capacity(COPY_BUFFER, temp.as_file_mut());
-        let decoded = decode_archive(input, format, &mut writer, content_size, &mut head);
+        let decoded = decode_archive(input, format, &mut writer, content_size, &mut head, buffer);
         match decoded {
             Ok(total) => match writer.flush() {
                 Ok(()) => Ok(total),
@@ -782,8 +793,16 @@ pub fn test_archive(input: &Path) -> ExtractResult {
     let _guard = ExtractingGuard::new();
     let mut head = Vec::with_capacity(DEMO_MAGIC.len());
     let mut sink = io::sink();
+    let mut buffer = vec![0u8; COPY_BUFFER];
 
-    match decode_archive(input, format, &mut sink, header.content_size, &mut head) {
+    match decode_archive(
+        input,
+        format,
+        &mut sink,
+        header.content_size,
+        &mut head,
+        &mut buffer,
+    ) {
         Ok(total) => {
             if head.len() < DEMO_MAGIC.len() {
                 report_magic_failure(&head);
@@ -1031,6 +1050,7 @@ pub fn run_extract_batch_outcome(
     let mut failed: Vec<&Path> = Vec::new();
 
     let _guard = ExtractingGuard::new();
+    let mut buffer = vec![0u8; COPY_BUFFER];
 
     for (index, input) in files.iter().enumerate() {
         if CANCEL.load(Ordering::Relaxed) {
@@ -1100,7 +1120,13 @@ pub fn run_extract_batch_outcome(
         };
         let output_path = csgo.join(out_name.as_str());
 
-        match extract_one(input, &output_path, keep_zst, move_to_recycle_bin) {
+        match extract_one_with_buffer(
+            input,
+            &output_path,
+            keep_zst,
+            move_to_recycle_bin,
+            &mut buffer,
+        ) {
             ExtractResult::Ok => extracted.push(out_name.into_inner()),
             ExtractResult::Failed => failed.push(input),
             ExtractResult::Cancelled => {
@@ -1499,5 +1525,28 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("missing.dem.zst");
         assert!(check_header(&missing).is_none());
+    }
+
+    #[test]
+    fn extract_one_with_buffer_reuses_buffer_across_calls() {
+        let directory = tempfile::tempdir().unwrap();
+        let input1 = directory.path().join("first.dem.zst");
+        let output1 = directory.path().join("first.dem");
+        let payload1 = b"PBDEMS2\x00first payload data";
+        fs::write(&input1, zstd_frame(payload1, true)).unwrap();
+
+        let input2 = directory.path().join("second.dem.zst");
+        let output2 = directory.path().join("second.dem");
+        let payload2 = b"PBDEMS2\x00second payload data with different length";
+        fs::write(&input2, zstd_frame(payload2, true)).unwrap();
+
+        let mut buffer = vec![0u8; COPY_BUFFER];
+        let res1 = extract_one_with_buffer(&input1, &output1, true, false, &mut buffer);
+        assert_eq!(res1, ExtractResult::Ok);
+        assert_eq!(fs::read(&output1).unwrap(), payload1);
+
+        let res2 = extract_one_with_buffer(&input2, &output2, true, false, &mut buffer);
+        assert_eq!(res2, ExtractResult::Ok);
+        assert_eq!(fs::read(&output2).unwrap(), payload2);
     }
 }
