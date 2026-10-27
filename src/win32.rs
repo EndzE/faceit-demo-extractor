@@ -26,7 +26,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE, MessageBoxW, SW_HIDE,
 };
-use windows::core::{HSTRING, PCWSTR, PWSTR};
+use windows::core::{HSTRING, PCWSTR, PWSTR, h};
 
 const APP_AUMID: &str = "FaceitDemoExtractor";
 const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
@@ -343,13 +343,13 @@ fn ensure_app_aumid() -> Result<(), Win32Error> {
 
 fn create_toast_document(title: &str, message: &str) -> windows::core::Result<XmlDocument> {
     let document = XmlDocument::new()?;
-    let toast = document.CreateElement(&HSTRING::from("toast"))?;
-    let visual = document.CreateElement(&HSTRING::from("visual"))?;
-    let binding = document.CreateElement(&HSTRING::from("binding"))?;
-    binding.SetAttribute(&HSTRING::from("template"), &HSTRING::from("ToastGeneric"))?;
+    let toast = document.CreateElement(h!("toast"))?;
+    let visual = document.CreateElement(h!("visual"))?;
+    let binding = document.CreateElement(h!("binding"))?;
+    binding.SetAttribute(h!("template"), h!("ToastGeneric"))?;
 
     for text in [title, message] {
-        let node = document.CreateElement(&HSTRING::from("text"))?;
+        let node = document.CreateElement(h!("text"))?;
         node.SetInnerText(&HSTRING::from(text))?;
         binding.AppendChild(&node)?;
     }
