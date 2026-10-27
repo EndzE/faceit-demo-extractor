@@ -234,12 +234,12 @@ fn next_free_name_finds_gaps_and_trims_long_stems() {
     File::create(directory.path().join("1_3.dem")).unwrap();
 
     assert_eq!(
-        extract::next_free_name(directory.path(), "1".to_string(), ".dem", "_"),
+        extract::next_free_name(directory.path(), "1", ".dem", "_"),
         "1_2.dem"
     );
 
     let long_stem = "a".repeat(300);
-    let name = extract::next_free_name(directory.path(), long_stem, ".dem", "_");
+    let name = extract::next_free_name(directory.path(), &long_stem, ".dem", "_");
     assert!(utf16_len(&name) <= MAX_FILENAME_LEN);
     assert!(name.ends_with("_1.dem"));
 }

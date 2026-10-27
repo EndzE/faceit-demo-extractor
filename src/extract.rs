@@ -924,8 +924,9 @@ fn next_free_name_with_attempts(
     name_with_suffix(stem, &format!("{delimiter}{stamp}"), ext)
 }
 
-pub fn next_free_name(folder: &Path, stem: String, ext: &str, delimiter: &str) -> String {
-    next_free_name_with_attempts(folder, &stem, ext, delimiter, 10_000)
+#[must_use]
+pub fn next_free_name(folder: &Path, stem: &str, ext: &str, delimiter: &str) -> String {
+    next_free_name_with_attempts(folder, stem, ext, delimiter, 10_000)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1050,7 +1051,7 @@ pub fn run_extract_batch_outcome(
                     natural
                 } else {
                     let (stem, ext) = split_ext(natural.as_str());
-                    let candidate = next_free_name(csgo, stem.to_string(), ext, &config.delimiter);
+                    let candidate = next_free_name(csgo, stem, ext, &config.delimiter);
                     match DemoFileName::parse(&candidate) {
                         Ok(valid) => valid,
                         Err(_) => DemoFileName::sanitize(&candidate),
@@ -1065,7 +1066,7 @@ pub fn run_extract_batch_outcome(
                     natural
                 } else {
                     let (stem, ext) = split_ext(natural.as_str());
-                    let candidate = next_free_name(csgo, stem.to_string(), ext, &config.delimiter);
+                    let candidate = next_free_name(csgo, stem, ext, &config.delimiter);
                     match DemoFileName::parse(&candidate) {
                         Ok(valid) => valid,
                         Err(_) => DemoFileName::sanitize(&candidate),
@@ -1080,7 +1081,7 @@ pub fn run_extract_batch_outcome(
                     Err(_) => DemoFileName::sanitize(target),
                 }
             } else {
-                let candidate = next_free_name(csgo, stem.to_string(), ext, &config.delimiter);
+                let candidate = next_free_name(csgo, stem, ext, &config.delimiter);
                 match DemoFileName::parse(&candidate) {
                     Ok(valid) => valid,
                     Err(_) => DemoFileName::sanitize(&candidate),
@@ -1091,7 +1092,7 @@ pub fn run_extract_batch_outcome(
                 "{}",
                 output::title(format!("[{}/{}] {}", index + 1, total, input.display()))
             );
-            let candidate = next_free_name(csgo, stem.to_string(), ext, &config.delimiter);
+            let candidate = next_free_name(csgo, stem, ext, &config.delimiter);
             match DemoFileName::parse(&candidate) {
                 Ok(valid) => valid,
                 Err(_) => DemoFileName::sanitize(&candidate),
