@@ -329,24 +329,19 @@ pub fn ensure_config_file(path: &Path, announce: bool) -> Result<(), String> {
                 save_config(path, &Config::defaults().updates())
             }
             Ok(data) => {
-                let defaults = Config::defaults().updates();
-                let missing: Vec<&str> = defaults
-                    .iter()
+                let updates: Vec<(&str, Value)> = Config::defaults()
+                    .updates()
+                    .into_iter()
                     .filter(|(key, _)| !data.contains_key(*key))
-                    .map(|(key, _)| *key)
                     .collect();
 
-                if missing.is_empty() {
+                if updates.is_empty() {
                     return Ok(());
                 }
 
-                let updates: Vec<(&str, Value)> = defaults
-                    .into_iter()
-                    .filter(|(key, _)| missing.contains(key))
-                    .collect();
-
                 save_config(path, &updates)?;
                 if announce {
+                    let missing: Vec<&str> = updates.iter().map(|(key, _)| *key).collect();
                     println!(
                         "{}",
                         output::field(
