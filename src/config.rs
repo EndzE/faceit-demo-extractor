@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::output::{self, warn};
@@ -16,7 +17,8 @@ use crate::{
 
 static CONFIG_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(default, from = "RawConfig")]
 pub struct Config {
     pub rename_demo: bool,
     pub target_filename: String,
@@ -26,6 +28,143 @@ pub struct Config {
     pub overwrite_single_file_extraction: bool,
     pub notifications_instead_of_console: bool,
     pub csgo_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawConfig {
+    rename_demo: Option<Value>,
+    target_filename: Option<Value>,
+    delimiter: Option<Value>,
+    keep_zst: Option<Value>,
+    move_to_recycle_bin: Option<Value>,
+    overwrite_single_file_extraction: Option<Value>,
+    notifications_instead_of_console: Option<Value>,
+    csgo_path: Option<Value>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+impl From<RawConfig> for Config {
+    fn from(raw: RawConfig) -> Self {
+        let target_filename = match raw.target_filename {
+            Some(Value::String(name)) => {
+                if let Ok(valid) = DemoFileName::parse(&name) {
+                    valid.into_inner()
+                } else {
+                    let val = Value::String(name);
+                    warn_config_once(
+                        "target_filename",
+                        format!(
+                            "invalid \"target_filename\" value {val} in config.json; it must be a single .dem filename; using the default {DEFAULT_TARGET_FILENAME}"
+                        ),
+                    );
+                    DEFAULT_TARGET_FILENAME.to_string()
+                }
+            }
+            Some(val) => {
+                warn_config_once(
+                    "target_filename",
+                    format!(
+                        "invalid \"target_filename\" value {val} in config.json; it must be a single .dem filename; using the default {DEFAULT_TARGET_FILENAME}"
+                    ),
+                );
+                DEFAULT_TARGET_FILENAME.to_string()
+            }
+            None => DEFAULT_TARGET_FILENAME.to_string(),
+        };
+
+        let delimiter = match raw.delimiter {
+            Some(Value::String(delim)) => {
+                let trimmed = delim.trim();
+                if is_valid_delimiter(trimmed) {
+                    trimmed.to_string()
+                } else {
+                    let val = Value::String(delim);
+                    warn_config_once(
+                        "delimiter",
+                        format!(
+                            "invalid \"delimiter\" value {val} in config.json; using the default \"{DEFAULT_DELIMITER}\""
+                        ),
+                    );
+                    DEFAULT_DELIMITER.to_string()
+                }
+            }
+            Some(val) => {
+                warn_config_once(
+                    "delimiter",
+                    format!(
+                        "invalid \"delimiter\" value {val} in config.json; using the default \"{DEFAULT_DELIMITER}\""
+                    ),
+                );
+                DEFAULT_DELIMITER.to_string()
+            }
+            None => DEFAULT_DELIMITER.to_string(),
+        };
+
+        let keep_zst = coerce_bool_val(raw.keep_zst, "keep_zst", DEFAULT_KEEP_ZST);
+        let move_to_recycle_bin = coerce_bool_val(
+            raw.move_to_recycle_bin,
+            "move_to_recycle_bin",
+            DEFAULT_MOVE_TO_RECYCLE_BIN,
+        );
+        let overwrite_single_file_extraction = coerce_bool_val(
+            raw.overwrite_single_file_extraction,
+            "overwrite_single_file_extraction",
+            DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
+        );
+        let rename_demo = coerce_bool_val(raw.rename_demo, "rename_demo", DEFAULT_RENAME_DEMO);
+        let notifications_instead_of_console = coerce_bool_val(
+            raw.notifications_instead_of_console,
+            "notifications_instead_of_console",
+            DEFAULT_NOTIFICATIONS_INSTEAD_OF_CONSOLE,
+        );
+
+        let csgo_path = match raw.csgo_path {
+            Some(Value::String(path)) if !path.trim().is_empty() => {
+                Some(path.trim().trim_matches('"').to_string())
+            }
+            Some(Value::String(_)) | None | Some(Value::Null) => None,
+            Some(other) => {
+                warn_config_once(
+                    "csgo_path",
+                    format!("invalid \"csgo_path\" value {other} in config.json; ignoring it"),
+                );
+                None
+            }
+        };
+
+        Self {
+            rename_demo,
+            target_filename,
+            delimiter,
+            keep_zst,
+            move_to_recycle_bin,
+            overwrite_single_file_extraction,
+            notifications_instead_of_console,
+            csgo_path,
+        }
+    }
+}
+
+fn coerce_bool_val(val: Option<Value>, key: &str, default: bool) -> bool {
+    match val {
+        Some(Value::Bool(b)) => b,
+        Some(other) => {
+            warn_config_once(
+                key,
+                format!(
+                    "invalid \"{key}\" value {other} in config.json; using the default {default}"
+                ),
+            );
+            default
+        }
+        None => default,
+    }
 }
 
 impl Config {
@@ -102,111 +241,10 @@ pub fn read_config_json(path: &Path) -> Map<String, Value> {
 }
 
 pub fn load_config(path: &Path) -> Config {
-    let data = read_config_json(path);
-    let mut config = Config::defaults();
-
-    let name_value = data
-        .get("target_filename")
-        .cloned()
-        .unwrap_or_else(|| Value::String(DEFAULT_TARGET_FILENAME.to_string()));
-
-    match &name_value {
-        Value::String(name) => {
-            if let Ok(valid) = DemoFileName::parse(name) {
-                config.target_filename = valid.into_inner();
-            } else {
-                warn_config_once(
-                    "target_filename",
-                    format!(
-                        "invalid \"target_filename\" value {name_value} in config.json; it must be a single .dem filename; using the default {DEFAULT_TARGET_FILENAME}"
-                    ),
-                );
-            }
-        }
-        _ => {
-            warn_config_once(
-                "target_filename",
-                format!(
-                    "invalid \"target_filename\" value {name_value} in config.json; it must be a single .dem filename; using the default {DEFAULT_TARGET_FILENAME}"
-                ),
-            );
-        }
-    }
-
-    let delim_value = data
-        .get("delimiter")
-        .cloned()
-        .unwrap_or_else(|| Value::String(DEFAULT_DELIMITER.to_string()));
-
-    match &delim_value {
-        Value::String(delim) => {
-            let trimmed = delim.trim();
-            if is_valid_delimiter(trimmed) {
-                config.delimiter = trimmed.to_string();
-            } else {
-                warn_config_once(
-                    "delimiter",
-                    format!(
-                        "invalid \"delimiter\" value {delim_value} in config.json; using the default \"{DEFAULT_DELIMITER}\""
-                    ),
-                );
-            }
-        }
-        _ => {
-            warn_config_once(
-                "delimiter",
-                format!(
-                    "invalid \"delimiter\" value {delim_value} in config.json; using the default \"{DEFAULT_DELIMITER}\""
-                ),
-            );
-        }
-    }
-
-    config.keep_zst = coerce_bool(&data, "keep_zst", DEFAULT_KEEP_ZST);
-    config.move_to_recycle_bin =
-        coerce_bool(&data, "move_to_recycle_bin", DEFAULT_MOVE_TO_RECYCLE_BIN);
-    config.overwrite_single_file_extraction = coerce_bool(
-        &data,
-        "overwrite_single_file_extraction",
-        DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
-    );
-    config.rename_demo = coerce_bool(&data, "rename_demo", DEFAULT_RENAME_DEMO);
-    config.notifications_instead_of_console = coerce_bool(
-        &data,
-        "notifications_instead_of_console",
-        DEFAULT_NOTIFICATIONS_INSTEAD_OF_CONSOLE,
-    );
-    config.csgo_path = match data.get("csgo_path") {
-        Some(Value::String(path)) if !path.trim().is_empty() => {
-            Some(path.trim().trim_matches('"').to_string())
-        }
-        Some(Value::String(_)) | None | Some(Value::Null) => None,
-        Some(other) => {
-            warn_config_once(
-                "csgo_path",
-                format!("invalid \"csgo_path\" value {other} in config.json; ignoring it"),
-            );
-            None
-        }
+    let Ok(bytes) = fs::read(path) else {
+        return Config::defaults();
     };
-
-    config
-}
-
-fn coerce_bool(data: &Map<String, Value>, key: &str, default: bool) -> bool {
-    let value = data.get(key).cloned().unwrap_or(Value::Bool(default));
-    match value {
-        Value::Bool(value) => value,
-        other => {
-            warn_config_once(
-                key,
-                format!(
-                    "invalid \"{key}\" value {other} in config.json; using the default {default}"
-                ),
-            );
-            default
-        }
-    }
+    serde_json::from_slice::<Config>(strip_bom(&bytes)).unwrap_or_default()
 }
 
 fn preserve_invalid_config(path: &Path) -> Result<PathBuf, String> {
