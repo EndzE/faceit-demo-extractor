@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
@@ -30,7 +30,34 @@ use windows::core::{HSTRING, PCWSTR, PWSTR};
 
 const APP_AUMID: &str = "FaceitDemoExtractor";
 const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
-static APP_AUMID_REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
+static APP_AUMID_REGISTERED: OnceLock<Result<(), Win32Error>> = OnceLock::new();
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum Win32Error {
+    #[error("Windows API error: {0}")]
+    Windows(#[source] windows::core::Error),
+
+    #[error("I/O error: {0}")]
+    Io(#[source] Arc<std::io::Error>),
+
+    #[error("registry error: {0}")]
+    Registry(String),
+
+    #[error("{0}")]
+    Custom(String),
+}
+
+impl From<windows::core::Error> for Win32Error {
+    fn from(err: windows::core::Error) -> Self {
+        Self::Windows(err)
+    }
+}
+
+impl From<std::io::Error> for Win32Error {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(Arc::new(err))
+    }
+}
 
 /// Teardown grace period allowing asynchronous WinRT RPC transmission to the
 /// Windows Notification Platform (Action Center) before the COM apartment is uninitialized.
@@ -47,7 +74,7 @@ impl Drop for ComGuard {
     }
 }
 
-pub fn recycle_file(path: &Path) -> Result<(), String> {
+pub fn recycle_file(path: &Path) -> Result<(), Win32Error> {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let normalized = strip_extended_prefix(&absolute);
     if !normalized.exists() && !absolute.exists() {
@@ -105,36 +132,34 @@ pub fn recycle_file(path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    result.map_err(|err| err.to_string())
+    result.map_err(Win32Error::from)
 }
 
-pub fn clear_console() -> Result<(), String> {
+pub fn clear_console() -> Result<(), Win32Error> {
     // SAFETY: STD_OUTPUT_HANDLE retrieves the standard console handle without side effects.
-    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.map_err(|err| err.to_string())?;
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }?;
 
     let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
     // SAFETY: `handle` is queried above and `&mut info` points to a valid, aligned stack structure.
-    unsafe { GetConsoleScreenBufferInfo(handle, &mut info) }.map_err(|err| err.to_string())?;
+    unsafe { GetConsoleScreenBufferInfo(handle, &mut info) }?;
 
     let cells = (info.dwSize.X.max(0) as u32).saturating_mul(info.dwSize.Y.max(0) as u32);
     let home = COORD { X: 0, Y: 0 };
     let mut written = 0u32;
 
     // SAFETY: `handle` is a valid console handle; `home` and `&mut written` are stack references.
-    unsafe { FillConsoleOutputCharacterW(handle, u16::from(b' '), cells, home, &mut written) }
-        .map_err(|err| err.to_string())?;
+    unsafe { FillConsoleOutputCharacterW(handle, u16::from(b' '), cells, home, &mut written) }?;
 
     // SAFETY: `handle` is a valid console handle; `home` and `&mut written` are stack references.
-    unsafe { FillConsoleOutputAttribute(handle, info.wAttributes.0, cells, home, &mut written) }
-        .map_err(|err| err.to_string())?;
+    unsafe { FillConsoleOutputAttribute(handle, info.wAttributes.0, cells, home, &mut written) }?;
 
     // SAFETY: `handle` is a valid console handle and `home` is a valid COORD value.
-    unsafe { SetConsoleCursorPosition(handle, home) }.map_err(|err| err.to_string())?;
+    unsafe { SetConsoleCursorPosition(handle, home) }?;
 
     Ok(())
 }
 
-pub fn available_space(path: &Path) -> Result<u64, String> {
+pub fn available_space(path: &Path) -> Result<u64, Win32Error> {
     let directory: Vec<u16> = path
         .as_os_str()
         .encode_wide()
@@ -143,8 +168,7 @@ pub fn available_space(path: &Path) -> Result<u64, String> {
     let mut available = 0u64;
 
     // SAFETY: `directory` is null-terminated and valid for reads; `available` is a valid stack variable.
-    unsafe { GetDiskFreeSpaceExW(PCWSTR(directory.as_ptr()), Some(&mut available), None, None) }
-        .map_err(|err| err.to_string())?;
+    unsafe { GetDiskFreeSpaceExW(PCWSTR(directory.as_ptr()), Some(&mut available), None, None) }?;
 
     Ok(available)
 }
@@ -232,15 +256,15 @@ fn push_quoted(target: &mut Vec<u16>, value: &OsStr) {
     target.push('"' as u16);
 }
 
-pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), String> {
+pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
     spawn_console(exe, args, false)
 }
 
-pub fn spawn_hidden_console(exe: &Path, args: &[&str]) -> Result<(), String> {
+pub fn spawn_hidden_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
     spawn_console(exe, args, true)
 }
 
-fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), String> {
+fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), Win32Error> {
     let application: Vec<u16> = exe
         .as_os_str()
         .encode_wide()
@@ -280,8 +304,7 @@ fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), String> 
             &startup,
             &mut process,
         )
-    }
-    .map_err(|err| err.to_string())?;
+    }?;
 
     // SAFETY: `process.hProcess` is a valid handle returned by successful CreateProcessW.
     let _ = unsafe { CloseHandle(process.hProcess) };
@@ -291,18 +314,23 @@ fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), String> 
     Ok(())
 }
 
-fn register_app_aumid() -> Result<(), String> {
+fn register_app_aumid() -> Result<(), Win32Error> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
     let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
         .create_subkey(APP_AUMID_KEY)
-        .map_err(|err| format!("could not register the notification app id: {err}"))?;
+        .map_err(|err| {
+            Win32Error::Registry(format!("could not register the notification app id: {err}"))
+        })?;
     key.set_value("DisplayName", &crate::APP_NAME)
-        .map_err(|err| format!("could not set the notification app name: {err}"))
+        .map_err(|err| {
+            Win32Error::Registry(format!("could not set the notification app name: {err}"))
+        })?;
+    Ok(())
 }
 
-fn ensure_app_aumid() -> Result<(), String> {
+fn ensure_app_aumid() -> Result<(), Win32Error> {
     APP_AUMID_REGISTERED.get_or_init(register_app_aumid).clone()
 }
 
@@ -325,19 +353,17 @@ fn create_toast_document(title: &str, message: &str) -> windows::core::Result<Xm
     Ok(document)
 }
 
-pub fn notify(title: &str, message: &str) -> Result<(), String> {
+pub fn notify(title: &str, message: &str) -> Result<(), Win32Error> {
     ensure_app_aumid()?;
 
     // SAFETY: Initializes COM for the current thread with multithreaded concurrency.
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
     let _com_guard = ComGuard(initialized);
 
-    let document = create_toast_document(title, message).map_err(|err| err.to_string())?;
-    let toast =
-        ToastNotification::CreateToastNotification(&document).map_err(|err| err.to_string())?;
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_AUMID))
-        .map_err(|err| err.to_string())?;
-    notifier.Show(&toast).map_err(|err| err.to_string())?;
+    let document = create_toast_document(title, message)?;
+    let toast = ToastNotification::CreateToastNotification(&document)?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_AUMID))?;
+    notifier.Show(&toast)?;
 
     // WinRT ToastNotifier::Show transmits notifications via asynchronous RPC to the
     // Windows Notification Platform (Action Center). Allow an adequate teardown grace

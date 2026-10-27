@@ -1,10 +1,23 @@
 use std::io;
+use std::path::PathBuf;
 
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
 
 use crate::Paths;
 use crate::config;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryError {
+    #[error("{name} was not found next to this executable.\nExpected: {}\n\nBuild or copy both binaries first.", path.display())]
+    MissingBinary { name: &'static str, path: PathBuf },
+
+    #[error("the right-click menu is not installed; nothing to update")]
+    NotInstalled,
+
+    #[error("registry I/O error: {0}")]
+    Io(#[from] io::Error),
+}
 
 pub const CTX_KEY: &str = r"Software\Classes\SystemFileAssociations\.zst\shell\FaceitExtract";
 pub const CTX_COMMAND_KEY: &str =
@@ -53,16 +66,13 @@ pub fn menu_label_for(target_filename: &str) -> String {
     format!("Extract to CS2 folder ({target_filename})")
 }
 
-pub fn ensure_install_binaries(paths: &Paths) -> Result<(), String> {
+pub fn ensure_install_binaries(paths: &Paths) -> Result<(), RegistryError> {
     for (exe, name) in [
         (paths.quiet_exe(), "faceit-dem-quiet.exe"),
         (paths.console_exe(), "faceit-dem.exe"),
     ] {
         if !exe.is_file() {
-            return Err(format!(
-                "{name} was not found next to this executable.\nExpected: {}\n\nBuild or copy both binaries first.",
-                exe.display()
-            ));
+            return Err(RegistryError::MissingBinary { name, path: exe });
         }
     }
 
@@ -112,35 +122,34 @@ pub fn context_menu_state(paths: &Paths) -> Option<bool> {
     context_menu_state_for(CTX_MENUS, paths)
 }
 
-pub fn install_context_menu_at(root: &str, label: &str, command: &str) -> Result<(), String> {
+pub fn install_context_menu_at(
+    root: &str,
+    label: &str,
+    command: &str,
+) -> Result<(), RegistryError> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(root).map_err(|err| err.to_string())?;
-    key.set_value("", &label.to_string())
-        .map_err(|err| err.to_string())?;
+    let (key, _) = hkcu.create_subkey(root)?;
+    key.set_value("", &label.to_string())?;
 
-    let (command_key, _) = hkcu
-        .create_subkey(format!("{root}\\command"))
-        .map_err(|err| err.to_string())?;
-    command_key
-        .set_value("", &command.to_string())
-        .map_err(|err| err.to_string())?;
+    let (command_key, _) = hkcu.create_subkey(format!("{root}\\command"))?;
+    command_key.set_value("", &command.to_string())?;
 
     Ok(())
 }
 
-pub fn set_context_menu_label_at(root: &str, label: &str) -> Result<(), String> {
+pub fn set_context_menu_label_at(root: &str, label: &str) -> Result<(), RegistryError> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(root).map_err(|err| err.to_string())?;
-    key.set_value("", &label.to_string())
-        .map_err(|err| err.to_string())
+    let (key, _) = hkcu.create_subkey(root)?;
+    key.set_value("", &label.to_string())?;
+    Ok(())
 }
 
-pub fn remove_context_menu_at(root: &str) -> Result<(), String> {
+pub fn remove_context_menu_at(root: &str) -> Result<(), RegistryError> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     match hkcu.delete_subkey_all(root) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err.to_string()),
+        Err(err) => Err(RegistryError::Io(err)),
     }
 }
 
@@ -153,7 +162,7 @@ fn expected_menu_label(paths: &Paths) -> String {
     }
 }
 
-fn install_context_menu_with(paths: &Paths, root: &str) -> Result<(), String> {
+fn install_context_menu_with(paths: &Paths, root: &str) -> Result<(), RegistryError> {
     ensure_install_binaries(paths)?;
     install_context_menu_at(
         root,
@@ -162,35 +171,35 @@ fn install_context_menu_with(paths: &Paths, root: &str) -> Result<(), String> {
     )
 }
 
-pub fn perform_install(paths: &Paths) -> Result<(), String> {
+pub fn perform_install(paths: &Paths) -> Result<(), RegistryError> {
     for menu in CTX_MENUS {
         install_context_menu_with(paths, menu.key)?;
     }
     Ok(())
 }
 
-pub fn perform_remove() -> Result<(), String> {
+pub fn perform_remove() -> Result<(), RegistryError> {
     for menu in CTX_MENUS {
         remove_context_menu_at(menu.key)?;
     }
     Ok(())
 }
 
-pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), String> {
+pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), RegistryError> {
     if reg_default(&format!("{root}\\command")).is_none() {
         if reg_key_exists(root) {
             return install_context_menu_with(paths, root);
         }
-        return Err("the right-click menu is not installed; nothing to update".to_string());
+        return Err(RegistryError::NotInstalled);
     }
 
     set_context_menu_label_at(root, &expected_menu_label(paths))
 }
 
-pub fn perform_update_label(paths: &Paths) -> Result<(), String> {
+pub fn perform_update_label(paths: &Paths) -> Result<(), RegistryError> {
     let installed: Vec<&ContextMenu> = CTX_MENUS.iter().filter(|menu| menu.installed()).collect();
     if installed.is_empty() {
-        return Err("the right-click menu is not installed; nothing to update".to_string());
+        return Err(RegistryError::NotInstalled);
     }
 
     for menu in installed {

@@ -834,15 +834,25 @@ pub fn test_archive(input: &Path) -> ExtractResult {
     }
 }
 
-pub fn delete_original(path: &Path, use_recycle_bin: bool) -> Result<(), String> {
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteOriginalError {
+    #[error("failed to recycle file: {0}")]
+    Recycle(#[from] crate::win32::Win32Error),
+
+    #[error("failed to remove file: {0}")]
+    Io(#[from] io::Error),
+}
+
+pub fn delete_original(path: &Path, use_recycle_bin: bool) -> Result<(), DeleteOriginalError> {
     if use_recycle_bin {
-        return win32::recycle_file(path);
+        win32::recycle_file(path)?;
+        return Ok(());
     }
 
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err.to_string()),
+        Err(err) => Err(DeleteOriginalError::Io(err)),
     }
 }
 

@@ -34,9 +34,24 @@ impl Drop for WorkerModeGuard {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
 pub enum ContextMenuError {
+    #[error("{0}")]
     Usage(String),
+    #[error("{0}")]
     Failure(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueueError {
+    #[error("could not open the worker lock: {0}")]
+    Lock(#[from] io::Error),
+
+    #[error("faceit-dem.exe was not found next to this executable.\nExpected: {}", .0.display())]
+    MissingExecutable(PathBuf),
+
+    #[error("could not spawn worker process: {0}")]
+    Spawn(#[from] crate::win32::Win32Error),
 }
 
 pub fn ensure_queue_dir(paths: &Paths) -> io::Result<()> {
@@ -401,28 +416,26 @@ fn cleanup_own_worker_pid(paths: &Paths) {
     }
 }
 
-pub fn worker_state(paths: &Paths) -> Result<(bool, Option<u32>), String> {
+pub fn worker_state(paths: &Paths) -> Result<(bool, Option<u32>), QueueError> {
     match worker_lock_is_free(paths) {
         Ok(true) => Ok((false, None)),
         Ok(false) => Ok((true, read_worker_pid(paths))),
-        Err(err) => Err(format!("could not open the worker lock: {err}")),
+        Err(err) => Err(QueueError::Lock(err)),
     }
 }
 
-pub fn spawn_worker(paths: &Paths) -> Result<(), String> {
+pub fn spawn_worker(paths: &Paths) -> Result<(), QueueError> {
     let exe = paths.console_exe();
     if !exe.is_file() {
-        return Err(format!(
-            "faceit-dem.exe was not found next to this executable.\nExpected: {}",
-            exe.display()
-        ));
+        return Err(QueueError::MissingExecutable(exe));
     }
 
     if config::load_config(&paths.config).notifications_instead_of_console {
-        crate::win32::spawn_hidden_console(&exe, &["--queue-worker"])
+        crate::win32::spawn_hidden_console(&exe, &["--queue-worker"])?;
     } else {
-        crate::win32::spawn_new_console(&exe, &["--queue-worker"])
+        crate::win32::spawn_new_console(&exe, &["--queue-worker"])?;
     }
+    Ok(())
 }
 
 fn notify_worker_error(message: &str) {

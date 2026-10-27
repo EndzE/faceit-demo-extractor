@@ -387,7 +387,7 @@ fn menu_install(paths: &Paths) {
                 output::muted("Right-click any .zst or .bz2 file in Explorer to extract it.")
             );
         }
-        Err(message) => output::error(message),
+        Err(message) => output::error(message.to_string()),
     }
 }
 
@@ -405,7 +405,7 @@ fn menu_remove() {
 
     match registry::perform_remove() {
         Ok(()) => println!("  {}", output::good("Removed.")),
-        Err(message) => output::error(message),
+        Err(message) => output::error(message.to_string()),
     }
 }
 
@@ -465,7 +465,7 @@ fn menu_change_filename(paths: &Paths) {
         if answer == "y" || answer == "yes" {
             match registry::perform_update_label(paths) {
                 Ok(()) => println!("  {}", output::good("Right-click menu text updated.")),
-                Err(message) => output::error(message),
+                Err(message) => output::error(message.to_string()),
             }
         }
     }
@@ -540,7 +540,7 @@ fn menu_toggle_rename_demo(paths: &Paths) {
                 if answer == "y" || answer == "yes" {
                     match registry::perform_update_label(paths) {
                         Ok(()) => println!("  {}", output::good("Right-click menu text updated.")),
-                        Err(message) => output::error(message),
+                        Err(message) => output::error(message.to_string()),
                     }
                 }
             }
@@ -845,7 +845,7 @@ fn run_registry_action(flag: &str, paths: &Paths) -> i32 {
             0
         }
         Err(message) => {
-            output::error(message);
+            output::error(message.to_string());
             println!();
             output::pause("Press Enter to close...");
             1

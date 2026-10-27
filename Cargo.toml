@@ -29,6 +29,7 @@ colored = "3.1.1"
 ctrlc = "3.5.2"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 tempfile = "3.27.0"
+thiserror = "2.0.21"
 unicode-general-category = "1.1.0"
 windows = { version = "0.62.2", features = [
     "Data_Xml_Dom",
