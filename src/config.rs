@@ -277,10 +277,6 @@ pub fn save_config(path: &Path, updates: &[(&str, Value)]) -> Result<(), String>
         merged.insert((*key).to_string(), value.clone());
     }
 
-    let body =
-        serde_json::to_string_pretty(&Value::Object(merged)).map_err(|err| err.to_string())?;
-    let text = format!("{body}\n");
-
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
     let mut temp = tempfile::Builder::new()
         .prefix(".config-")
@@ -288,8 +284,9 @@ pub fn save_config(path: &Path, updates: &[(&str, Value)]) -> Result<(), String>
         .tempfile_in(directory)
         .map_err(|err| err.to_string())?;
 
-    temp.write_all(text.as_bytes())
+    serde_json::to_writer_pretty(&mut temp, &Value::Object(merged))
         .map_err(|err| err.to_string())?;
+    temp.write_all(b"\n").map_err(|err| err.to_string())?;
     temp.flush().map_err(|err| err.to_string())?;
     temp.as_file().sync_all().map_err(|err| err.to_string())?;
     temp.persist(path).map_err(|err| err.error.to_string())?;
