@@ -4,18 +4,11 @@ version = "2.0.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
+default-run = "faceit-dem"
 
 [lib]
 name = "faceit_demo_extractor"
 path = "src/lib.rs"
-
-[[bin]]
-name = "faceit-dem"
-path = "src/main.rs"
-
-[[bin]]
-name = "faceit-dem-quiet"
-path = "src/quiet.rs"
 
 [profile.release]
 strip = true
