@@ -129,10 +129,10 @@ pub fn install_context_menu_at(
 ) -> Result<(), RegistryError> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(root)?;
-    key.set_value("", &label.to_string())?;
+    key.set_value("", &label)?;
 
     let (command_key, _) = hkcu.create_subkey(format!("{root}\\command"))?;
-    command_key.set_value("", &command.to_string())?;
+    command_key.set_value("", &command)?;
 
     Ok(())
 }
@@ -140,7 +140,7 @@ pub fn install_context_menu_at(
 pub fn set_context_menu_label_at(root: &str, label: &str) -> Result<(), RegistryError> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(root)?;
-    key.set_value("", &label.to_string())?;
+    key.set_value("", &label)?;
     Ok(())
 }
 

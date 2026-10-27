@@ -165,12 +165,35 @@ fn install_ctrlc_handler() {
     }
 }
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
     if let Some(message) = payload.downcast_ref::<&str>() {
-        return (*message).to_string();
+        return message;
     }
     if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
+        return message.as_str();
     }
-    "unknown panic".to_string()
+    "unknown panic"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_panic_message_str() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("explicit panic message");
+        assert_eq!(panic_message(payload.as_ref()), "explicit panic message");
+    }
+
+    #[test]
+    fn test_panic_message_string() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("heap panic message"));
+        assert_eq!(panic_message(payload.as_ref()), "heap panic message");
+    }
+
+    #[test]
+    fn test_panic_message_other() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(panic_message(payload.as_ref()), "unknown panic");
+    }
 }
