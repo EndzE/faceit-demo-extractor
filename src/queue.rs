@@ -581,6 +581,8 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
         }
     }
 
+    cleanup_worker_pid(paths);
+
     if let Err(message) = spawn_worker(paths) {
         return Err(combine_failure(
             partial_failures,
@@ -593,16 +595,10 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
         if Instant::now() >= deadline {
             break;
         }
-        match worker_lock_is_free(paths) {
-            Ok(true) => sleep(STARTUP_POLL),
-            Ok(false) => break,
-            Err(err) => {
-                return Err(combine_failure(
-                    partial_failures,
-                    format!("could not open the worker lock: {err}"),
-                ));
-            }
+        if read_worker_pid(paths).is_some() || !has_queued_files(paths) {
+            break;
         }
+        sleep(STARTUP_POLL);
     }
 
     drop(spawn_guard);
@@ -623,7 +619,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         return 1;
     }
 
-    let mut lock = match acquire_worker_lock(paths) {
+    let lock = match acquire_worker_lock(paths) {
         Ok(Some(lock)) => lock,
         Ok(None) => return 0,
         Err(err) => {
@@ -650,38 +646,17 @@ pub fn run_worker(paths: &Paths) -> i32 {
             output::cancelled();
             discard_queued_files(paths);
             cleanup_own_worker_pid(paths);
+            drop(lock);
             return 130;
         }
 
         if files.is_empty() {
-            drop(lock);
-
             if has_queued_files(paths) {
-                match acquire_worker_lock(paths) {
-                    Ok(Some(new_lock)) => {
-                        lock = new_lock;
-                        write_worker_pid(paths);
-                        continue;
-                    }
-                    Ok(None) => {
-                        cleanup_own_worker_pid(paths);
-                        break;
-                    }
-                    Err(err) => {
-                        output::error(format!("could not open the worker lock: {err}"));
-                        if notifications {
-                            notify_worker_error(&format!(
-                                "Could not continue processing the queue: {err}"
-                            ));
-                        }
-                        cleanup_own_worker_pid(paths);
-                        pause_worker(notifications);
-                        return 1;
-                    }
-                }
+                continue;
             }
 
             cleanup_own_worker_pid(paths);
+            drop(lock);
             break;
         }
 
@@ -695,6 +670,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         if outcome.exit_code == 130 {
             discard_queued_files(paths);
             cleanup_own_worker_pid(paths);
+            drop(lock);
             return 130;
         }
         if outcome.exit_code != 0 {

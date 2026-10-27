@@ -1375,6 +1375,86 @@ fn worker_breaks_cleanly_when_handoff_lock_is_lost() {
 }
 
 #[test]
+fn worker_processes_queued_batches_under_continuous_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    let csgo = directory.path().join("csgo");
+    fs::create_dir_all(&csgo).unwrap();
+    fs::write(
+        &paths.config,
+        serde_json::json!({
+            "target_filename": "1.dem",
+            "keep_zst": true,
+            "move_to_recycle_bin": false,
+            "csgo_path": "csgo"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let input1 = directory.path().join("demo1.dem.zst");
+    let input2 = directory.path().join("demo2.dem.zst");
+    let payload1 = demo_payload(1024);
+    let payload2 = demo_payload(2048);
+    write_archive(&input1, &payload1, true);
+    write_archive(&input2, &payload2, true);
+
+    queue::enqueue_paths(&paths, &[input1.into_os_string(), input2.into_os_string()]).unwrap();
+
+    let worker_paths = paths.clone();
+    let worker = thread::spawn(move || queue::run_worker(&worker_paths));
+
+    let output1 = csgo.join("1_1.dem");
+    let output2 = csgo.join("1_2.dem");
+
+    assert!(
+        wait_until(
+            || queue::read_worker_pid(&paths).is_some(),
+            Duration::from_secs(5)
+        ),
+        "worker did not write pid"
+    );
+
+    assert!(
+        queue::try_acquire_worker_lock(&paths).unwrap().is_none(),
+        "worker lock should be held while worker is active"
+    );
+
+    assert!(
+        wait_until(
+            || output1.is_file() && output2.is_file(),
+            Duration::from_secs(5)
+        ),
+        "both demos should be extracted"
+    );
+
+    let exit_code = worker.join().unwrap();
+    assert_eq!(exit_code, 0);
+
+    assert!(queue::worker_lock_is_free(&paths).unwrap());
+    assert_eq!(queue::read_worker_pid(&paths), None);
+}
+
+#[test]
+fn context_menu_cleans_stale_pid_before_spawning() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_tests(directory.path());
+    fs::create_dir_all(&paths.queue_dir).unwrap();
+
+    // Stale PID from a previous dead process
+    queue::write_worker_pid(&paths);
+    assert!(queue::read_worker_pid(&paths).is_some());
+
+    let target = directory.path().join("demo.zst");
+    fs::write(&target, b"x").unwrap();
+
+    // handle_context_menu will fail because faceit-dem.exe is missing,
+    // but before attempting spawn, it cleans up the stale PID.
+    let _ = queue::handle_context_menu(&paths, &[target.into_os_string()]);
+    assert_eq!(queue::read_worker_pid(&paths), None);
+}
+
+#[test]
 fn worker_pid_round_trips() {
     let directory = tempfile::tempdir().unwrap();
     let paths = Paths::for_tests(directory.path());
