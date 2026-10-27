@@ -307,9 +307,16 @@ fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), Win32Err
     }?;
 
     // SAFETY: `process.hProcess` is a valid handle returned by successful CreateProcessW.
-    let _ = unsafe { CloseHandle(process.hProcess) };
+    // INTENTIONAL: The child process was successfully spawned; closing handles detaches it.
+    // Handle close failures are logged as warnings and cannot undo the process creation.
+    if let Err(err) = unsafe { CloseHandle(process.hProcess) } {
+        crate::output::warn(format!("failed to close process handle: {err}"));
+    }
     // SAFETY: `process.hThread` is a valid handle returned by successful CreateProcessW.
-    let _ = unsafe { CloseHandle(process.hThread) };
+    // INTENTIONAL: Child thread handle close failure is non-fatal and does not affect the spawned process.
+    if let Err(err) = unsafe { CloseHandle(process.hThread) } {
+        crate::output::warn(format!("failed to close thread handle: {err}"));
+    }
 
     Ok(())
 }

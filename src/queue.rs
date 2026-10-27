@@ -240,10 +240,22 @@ pub fn take_queue_files(paths: &Paths) -> Vec<PathBuf> {
             continue;
         };
         let Some(path) = decode_queue_path(&bytes) else {
-            let _ = fs::remove_file(&entry_path);
+            // INTENTIONAL: Best-effort removal of corrupt queue entry file.
+            if let Err(err) = fs::remove_file(&entry_path) {
+                output::warn(format!(
+                    "failed to remove invalid queue entry {}: {err}",
+                    entry_path.display()
+                ));
+            }
             continue;
         };
-        let _ = fs::remove_file(&entry_path);
+        // INTENTIONAL: Best-effort removal of processed queue entry file.
+        if let Err(err) = fs::remove_file(&entry_path) {
+            output::warn(format!(
+                "failed to remove processed queue entry {}: {err}",
+                entry_path.display()
+            ));
+        }
         if keys.insert(path_key(&path)) {
             paths_out.push(path);
         }
@@ -374,12 +386,16 @@ pub fn worker_lock_is_free(paths: &Paths) -> io::Result<bool> {
     let Some(file) = try_acquire_worker_lock(paths)? else {
         return Ok(false);
     };
-    let _ = file.unlock();
+    file.unlock()?;
     Ok(true)
 }
 
 pub fn write_worker_pid(paths: &Paths) {
-    let _ = write_worker_pid_atomically(paths);
+    if let Err(err) = write_worker_pid_atomically(paths) {
+        // INTENTIONAL: Writing worker PID is advisory for external status monitoring;
+        // failure to write it must not abort the worker, but should be reported.
+        output::warn(format!("failed to record worker PID: {err}"));
+    }
 }
 
 fn write_worker_pid_atomically(paths: &Paths) -> io::Result<()> {
@@ -407,7 +423,12 @@ pub fn read_worker_pid(paths: &Paths) -> Option<u32> {
 }
 
 pub fn cleanup_worker_pid(paths: &Paths) {
-    let _ = fs::remove_file(paths.worker_pid());
+    // INTENTIONAL: Best-effort cleanup; file may not exist if never written or already removed.
+    if let Err(err) = fs::remove_file(paths.worker_pid())
+        && err.kind() != io::ErrorKind::NotFound
+    {
+        output::warn(format!("failed to remove worker PID file: {err}"));
+    }
 }
 
 fn cleanup_own_worker_pid(paths: &Paths) {
@@ -439,7 +460,9 @@ pub fn spawn_worker(paths: &Paths) -> Result<(), QueueError> {
 }
 
 fn notify_worker_error(message: &str) {
-    let _ = crate::win32::notify("Extraction failed", message);
+    if let Err(err) = crate::win32::notify("Extraction failed", message) {
+        output::warn(format!("failed to show error notification: {err}"));
+    }
 }
 
 pub fn format_playdemo_commands(extracted: &[String]) -> String {
@@ -530,7 +553,9 @@ pub fn extraction_notification_content(outcome: &extract::ExtractOutcome) -> (St
 
 fn notify_extraction_result(outcome: &extract::ExtractOutcome) {
     let (title, message) = extraction_notification_content(outcome);
-    let _ = crate::win32::notify(&title, &message);
+    if let Err(err) = crate::win32::notify(&title, &message) {
+        output::warn(format!("failed to show completion notification: {err}"));
+    }
 }
 
 fn pause_worker(notifications: bool) {
@@ -719,6 +744,7 @@ mod tests {
     impl Drop for NoReadHandle {
         fn drop(&mut self) {
             // SAFETY: `self.0` is a valid open file handle created in `deny_read_sharing`.
+            // INTENTIONAL: Handle cleanup failure during Drop is non-fatal and cannot be propagated.
             let _ = unsafe { CloseHandle(self.0) };
         }
     }
