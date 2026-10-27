@@ -86,10 +86,10 @@ pub(crate) fn path_key(path: &Path) -> Vec<u16> {
 const UTF16_LE_BOM: [u8; 2] = [0xFF, 0xFE];
 
 fn encode_queue_path(path: &Path) -> Vec<u8> {
-    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
-    let mut bytes = Vec::with_capacity(UTF16_LE_BOM.len() + units.len() * 2);
+    let wide = path.as_os_str().encode_wide();
+    let mut bytes = Vec::with_capacity(UTF16_LE_BOM.len() + wide.size_hint().0 * 2);
     bytes.extend_from_slice(&UTF16_LE_BOM);
-    for unit in units {
+    for unit in wide {
         bytes.extend_from_slice(&unit.to_le_bytes());
     }
     bytes
@@ -769,6 +769,13 @@ mod tests {
             .unwrap()
         };
         NoReadHandle(handle)
+    }
+
+    #[test]
+    fn encode_decode_queue_path_roundtrip() {
+        let path = Path::new(r"C:\test\demo name with spaces 🎮.dem.gz");
+        let encoded = encode_queue_path(path);
+        assert_eq!(decode_queue_path(&encoded), Some(path.to_path_buf()));
     }
 
     #[test]

@@ -26,16 +26,19 @@ fn decode_reg_string(raw: &RegValue) -> Option<String> {
         _ => return None,
     }
 
-    let units: Vec<u16> = raw
+    let iter = raw
         .bytes
         .as_chunks::<2>()
         .0
         .iter()
         .map(|pair| u16::from_le_bytes(*pair))
-        .take_while(|&unit| unit != 0)
-        .collect();
+        .take_while(|&unit| unit != 0);
 
-    Some(String::from_utf16_lossy(&units))
+    Some(
+        char::decode_utf16(iter)
+            .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect(),
+    )
 }
 
 pub fn read_reg_string(subkey: &str, value_name: &str) -> Option<String> {
@@ -135,4 +138,32 @@ pub fn find_cs2_csgo_path(
     }
 
     (None, attempts.join("; "))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use super::*;
+
+    #[test]
+    fn test_decode_reg_string() {
+        let value = RegValue {
+            vtype: RegType::REG_SZ,
+            bytes: Cow::Borrowed(&[b'C', 0, b':', 0, b'\\', 0, b'C', 0, b'S', 0, 0, 0]),
+        };
+        assert_eq!(decode_reg_string(&value), Some(r"C:\CS".to_string()));
+
+        let invalid_type = RegValue {
+            vtype: RegType::REG_DWORD,
+            bytes: Cow::Borrowed(&[0, 0, 0, 0]),
+        };
+        assert_eq!(decode_reg_string(&invalid_type), None);
+
+        let empty = RegValue {
+            vtype: RegType::REG_SZ,
+            bytes: Cow::Borrowed(&[]),
+        };
+        assert_eq!(decode_reg_string(&empty), Some(String::new()));
+    }
 }

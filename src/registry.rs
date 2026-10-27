@@ -197,13 +197,14 @@ pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), Registry
 }
 
 pub fn perform_update_label(paths: &Paths) -> Result<(), RegistryError> {
-    let installed: Vec<&ContextMenu> = CTX_MENUS.iter().filter(|menu| menu.installed()).collect();
-    if installed.is_empty() {
-        return Err(RegistryError::NotInstalled);
+    let mut any_installed = false;
+    for menu in CTX_MENUS.iter().filter(|menu| menu.installed()) {
+        any_installed = true;
+        perform_update_label_at(paths, menu.key)?;
     }
 
-    for menu in installed {
-        perform_update_label_at(paths, menu.key)?;
+    if !any_installed {
+        return Err(RegistryError::NotInstalled);
     }
 
     Ok(())
