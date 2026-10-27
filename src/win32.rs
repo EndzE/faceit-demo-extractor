@@ -1,13 +1,16 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
-use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Foundation::{CloseHandle, E_ABORT};
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+use windows::Win32::System::Com::{
+    CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoUninitialize,
+};
 use windows::Win32::System::Console::{
     CONSOLE_SCREEN_BUFFER_INFO, COORD, FillConsoleOutputAttribute, FillConsoleOutputCharacterW,
     GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE, SetConsoleCursorPosition,
@@ -16,55 +19,89 @@ use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Threading::{
     CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOW,
 };
-use windows::Win32::UI::Shell::{FO_DELETE, SHFILEOPSTRUCTW, SHFileOperationW};
+use windows::Win32::UI::Shell::{
+    FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING,
+    FOFX_RECYCLEONDELETE, FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE, MessageBoxW, SW_HIDE,
 };
-use windows::core::{BOOL, HSTRING, PCWSTR, PWSTR};
-
-const FOF_WANTNUKEWARNING: u16 = 0x4000;
-const FOF_FLAGS: u16 = 0x0004 | 0x0010 | 0x0040 | 0x0400 | FOF_WANTNUKEWARNING;
+use windows::core::{HSTRING, PCWSTR, PWSTR};
 
 const APP_AUMID: &str = "FaceitDemoExtractor";
 const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
 static APP_AUMID_REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 
+struct ComGuard(bool);
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            // SAFETY: Balances the successful CoInitializeEx call on the same thread.
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
 pub fn recycle_file(path: &Path) -> Result<(), String> {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut from: Vec<u16> = absolute
-        .as_os_str()
-        .encode_wide()
-        .chain([0u16, 0u16])
-        .collect();
-
-    let mut operation = SHFILEOPSTRUCTW {
-        hwnd: HWND::default(),
-        wFunc: FO_DELETE,
-        pFrom: PCWSTR(from.as_mut_ptr()),
-        pTo: PCWSTR::null(),
-        fFlags: FOF_FLAGS,
-        fAnyOperationsAborted: BOOL(0),
-        hNameMappings: std::ptr::null_mut(),
-        lpszProgressTitle: PCWSTR::null(),
-    };
-
-    // SAFETY: `operation` is a valid struct on the stack. `pFrom` points to `from`
-    // which is guaranteed to be double-null terminated and lives for the duration of the call.
-    let result = unsafe { SHFileOperationW(&mut operation) };
-
-    if operation.fAnyOperationsAborted.as_bool() {
-        return Err("operation was cancelled".to_string());
-    }
-
-    if result == 0 {
+    let normalized = strip_extended_prefix(&absolute);
+    if !normalized.exists() && !absolute.exists() {
         return Ok(());
     }
 
-    if !absolute.exists() {
+    // SAFETY: Initializes COM for the calling thread as single-threaded apartment (STA),
+    // which is required for Windows Shell IFileOperation interfaces.
+    let initialized =
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }.is_ok();
+    let _com_guard = ComGuard(initialized);
+
+    let result = (|| -> windows::core::Result<()> {
+        // SAFETY: FileOperation is a standard Windows Shell coclass implementing IFileOperation.
+        let operation: IFileOperation =
+            unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL) }?;
+
+        let flags = FOF_ALLOWUNDO
+            | FOF_NOCONFIRMATION
+            | FOF_NOERRORUI
+            | FOF_SILENT
+            | FOF_WANTNUKEWARNING
+            | FOFX_RECYCLEONDELETE;
+        // SAFETY: `operation` is a valid COM interface pointer queried above.
+        unsafe { operation.SetOperationFlags(flags) }?;
+
+        let path_wide: Vec<u16> = normalized
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        // SAFETY: `path_wide` is a valid null-terminated UTF-16 wide string.
+        let item: IShellItem =
+            unsafe { SHCreateItemFromParsingName(PCWSTR(path_wide.as_ptr()), None) }?;
+
+        // SAFETY: `item` is a valid IShellItem interface pointer; None specifies no custom progress sink.
+        unsafe { operation.DeleteItem(&item, None) }?;
+        // SAFETY: Executes the scheduled file operations via the Windows Shell subsystem.
+        unsafe { operation.PerformOperations() }?;
+
+        // SAFETY: Queries whether any operation in the batch was cancelled by the user.
+        let aborted = unsafe { operation.GetAnyOperationsAborted() }?;
+        if aborted.as_bool() {
+            return Err(windows::core::Error::new(
+                E_ABORT,
+                "operation was cancelled",
+            ));
+        }
+
+        Ok(())
+    })();
+
+    if result.is_err() && !normalized.exists() && !absolute.exists() {
         return Ok(());
     }
 
-    Err(format!("SHFileOperationW returned {result}"))
+    result.map_err(|err| err.to_string())
 }
 
 pub fn clear_console() -> Result<(), String> {
@@ -128,6 +165,43 @@ pub fn expand_env(value: &str) -> String {
         .position(|&unit| unit == 0)
         .unwrap_or(buffer.len());
     String::from_utf16_lossy(&buffer[..end])
+}
+
+fn strip_extended_prefix(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    match components.next() {
+        Some(Component::Prefix(prefix_comp)) => match prefix_comp.kind() {
+            Prefix::VerbatimDisk(disk) => {
+                let mut buf = PathBuf::from(format!("{}:", char::from(disk)));
+                for comp in components {
+                    buf.push(comp.as_os_str());
+                }
+                buf
+            }
+            Prefix::VerbatimUNC(server, share) => {
+                let mut buf = PathBuf::from(format!(
+                    r"\\{}\{}",
+                    server.to_string_lossy(),
+                    share.to_string_lossy()
+                ));
+                for comp in components {
+                    buf.push(comp.as_os_str());
+                }
+                buf
+            }
+            Prefix::Verbatim(v) => {
+                let mut buf = PathBuf::from(v);
+                for comp in components {
+                    buf.push(comp.as_os_str());
+                }
+                buf
+            }
+            _ => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
+    }
 }
 
 fn push_quoted(target: &mut Vec<u16>, value: &OsStr) {
@@ -316,6 +390,26 @@ mod tests {
     }
 
     #[test]
+    fn strip_extended_prefix_preserves_and_strips() {
+        assert_eq!(
+            strip_extended_prefix(Path::new(r"\\?\C:\foo\bar")),
+            PathBuf::from(r"C:\foo\bar")
+        );
+        assert_eq!(
+            strip_extended_prefix(Path::new(r"\\?\UNC\server\share\folder\file.txt")),
+            PathBuf::from(r"\\server\share\folder\file.txt")
+        );
+        assert_eq!(
+            strip_extended_prefix(Path::new(r"C:\foo\bar")),
+            PathBuf::from(r"C:\foo\bar")
+        );
+        assert_eq!(
+            strip_extended_prefix(Path::new(r"foo\bar")),
+            PathBuf::from(r"foo\bar")
+        );
+    }
+
+    #[test]
     fn quoting_preserves_non_unicode_paths() {
         use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt;
@@ -326,5 +420,38 @@ mod tests {
         push_quoted(&mut buffer, path.as_os_str());
 
         assert_eq!(buffer, vec!['"' as u16, 0xD800, '"' as u16]);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_recycle_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let test_file = temp_dir.path().join("recycle_me.txt");
+        std::fs::write(&test_file, "hello to recycle bin").unwrap();
+        assert!(test_file.exists());
+
+        let res = recycle_file(&test_file);
+        assert!(res.is_ok());
+        assert!(!test_file.exists());
+
+        // Test non-existent file
+        let non_existent = temp_dir.path().join("does_not_exist.txt");
+        assert!(recycle_file(&non_existent).is_ok());
+
+        // Test long path (> 260 characters)
+        let mut deep_dir = temp_dir.path().to_path_buf();
+        for i in 0..15 {
+            deep_dir = deep_dir.join(format!("long_folder_name_level_{i}"));
+        }
+        std::fs::create_dir_all(&deep_dir).unwrap();
+        let long_file = deep_dir.join("long_path_file_to_recycle.txt");
+        std::fs::write(&long_file, "deep nested file").unwrap();
+        let long_file_len = long_file.to_str().unwrap().len();
+        assert!(long_file_len > 260);
+        assert!(long_file.exists());
+
+        let res_long = recycle_file(&long_file);
+        assert!(res_long.is_ok());
+        assert!(!long_file.exists());
     }
 }
