@@ -913,12 +913,20 @@ pub fn uncompressed_demo_name(input: &Path) -> DemoFileName {
 }
 
 fn name_with_suffix(stem: &str, suffix: &str, ext: &str) -> String {
-    let mut stem = stem.to_string();
-    while !stem.is_empty()
-        && utf16_len(&stem) + utf16_len(suffix) + utf16_len(ext) > MAX_FILENAME_LEN
-    {
-        stem.pop();
+    let max_stem_utf16 = MAX_FILENAME_LEN.saturating_sub(utf16_len(suffix) + utf16_len(ext));
+    let mut accumulated_utf16 = 0;
+    let mut truncate_byte_idx = stem.len();
+
+    for (idx, ch) in stem.char_indices() {
+        let ch_utf16_len = ch.len_utf16();
+        if accumulated_utf16 + ch_utf16_len > max_stem_utf16 {
+            truncate_byte_idx = idx;
+            break;
+        }
+        accumulated_utf16 += ch_utf16_len;
     }
+
+    let stem = &stem[..truncate_byte_idx];
     format!("{stem}{suffix}{ext}")
 }
 
@@ -1325,6 +1333,39 @@ mod tests {
 
         assert!(utf16_len(&name) <= MAX_FILENAME_LEN);
         assert!(name.ends_with("_1234567890.dem"));
+        assert_eq!(
+            name,
+            format!("{}_1234567890.dem", "a".repeat(MAX_FILENAME_LEN - 15))
+        );
+    }
+
+    #[test]
+    fn name_with_suffix_handles_short_and_empty_stem() {
+        assert_eq!(name_with_suffix("match", "_1", ".dem"), "match_1.dem");
+        assert_eq!(name_with_suffix("", "_1", ".dem"), "_1.dem");
+    }
+
+    #[test]
+    fn name_with_suffix_handles_surrogate_pairs_at_boundary() {
+        // ext: ".dem" (4 units), suffix: "_1" (2 units) -> max_stem_utf16 = 255 - 6 = 249
+        // 248 'a's (248 units) + "🦀" (2 units) = 250 units > 249, so "🦀" must be omitted
+        let stem = format!("{}🦀", "a".repeat(248));
+        let name = name_with_suffix(&stem, "_1", ".dem");
+        assert_eq!(name, format!("{}_1.dem", "a".repeat(248)));
+        assert!(utf16_len(&name) <= MAX_FILENAME_LEN);
+
+        // 247 'a's (247 units) + "🦀" (2 units) = 249 units <= 249, so "🦀" must be kept
+        let stem_fits = format!("{}🦀", "a".repeat(247));
+        let name_fits = name_with_suffix(&stem_fits, "_1", ".dem");
+        assert_eq!(name_fits, format!("{}🦀_1.dem", "a".repeat(247)));
+        assert_eq!(utf16_len(&name_fits), MAX_FILENAME_LEN);
+    }
+
+    #[test]
+    fn name_with_suffix_truncates_stem_completely_when_suffix_and_ext_exceed_limit() {
+        let long_suffix = "s".repeat(MAX_FILENAME_LEN);
+        let name = name_with_suffix("demo_stem", &long_suffix, ".dem");
+        assert_eq!(name, format!("{long_suffix}.dem"));
     }
 
     #[test]
