@@ -12,11 +12,11 @@ pub const RULE_WIDTH: usize = 66;
 static SILENT: AtomicBool = AtomicBool::new(false);
 
 pub fn set_silent(silent: bool) {
-    SILENT.store(silent, Ordering::SeqCst);
+    SILENT.store(silent, Ordering::Relaxed);
 }
 
 fn is_silent() -> bool {
-    SILENT.load(Ordering::SeqCst)
+    SILENT.load(Ordering::Relaxed)
 }
 
 pub fn title(text: impl Display) -> String {
@@ -140,12 +140,12 @@ pub fn pause(message: &str) {
         return;
     }
 
-    crate::PAUSING.store(true, Ordering::SeqCst);
+    crate::PAUSING.store(true, Ordering::Relaxed);
     print!("{}", message.dimmed());
     let _ = io::stdout().flush();
     let mut line = String::new();
     let _ = io::stdin().read_line(&mut line);
-    crate::PAUSING.store(false, Ordering::SeqCst);
+    crate::PAUSING.store(false, Ordering::Relaxed);
 }
 
 pub fn format_mb(bytes: u64) -> String {

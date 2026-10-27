@@ -86,14 +86,14 @@ struct ExtractingGuard;
 
 impl ExtractingGuard {
     fn new() -> Self {
-        EXTRACTING.store(true, Ordering::SeqCst);
+        EXTRACTING.store(true, Ordering::Relaxed);
         Self
     }
 }
 
 impl Drop for ExtractingGuard {
     fn drop(&mut self) {
-        EXTRACTING.store(false, Ordering::SeqCst);
+        EXTRACTING.store(false, Ordering::Relaxed);
     }
 }
 
@@ -469,7 +469,7 @@ fn copy_payload(
     progress: &mut output::Progress,
 ) -> Result<(), CopyError> {
     loop {
-        if CANCEL.load(Ordering::SeqCst) {
+        if CANCEL.load(Ordering::Relaxed) {
             return Err(CopyError::Cancelled);
         }
 
@@ -703,7 +703,7 @@ pub fn extract_one(
         return ExtractResult::Failed;
     }
 
-    if CANCEL.load(Ordering::SeqCst) {
+    if CANCEL.load(Ordering::Relaxed) {
         return ExtractResult::Cancelled;
     }
 
@@ -1036,7 +1036,7 @@ pub fn run_extract_batch_outcome(
     let _guard = ExtractingGuard::new();
 
     for (index, input) in files.iter().enumerate() {
-        if CANCEL.load(Ordering::SeqCst) {
+        if CANCEL.load(Ordering::Relaxed) {
             output::cancelled();
             return ExtractOutcome {
                 exit_code: 130,

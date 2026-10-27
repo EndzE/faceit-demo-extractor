@@ -118,7 +118,7 @@ pub fn run_console() -> i32 {
             );
             output::error(&message);
 
-            let notifications = WORKER_MODE.load(Ordering::SeqCst)
+            let notifications = WORKER_MODE.load(Ordering::Relaxed)
                 && config::load_config(&Paths::discover().config).notifications_instead_of_console;
             if notifications {
                 let _ = win32::notify("Extraction failed", &message);
@@ -148,9 +148,9 @@ pub fn run_quiet() -> i32 {
 
 fn install_ctrlc_handler() {
     let installed = ctrlc::set_handler(|| {
-        CANCEL.store(true, Ordering::SeqCst);
-        if !PAUSING.load(Ordering::SeqCst)
-            && (EXTRACTING.load(Ordering::SeqCst) || WORKER_MODE.load(Ordering::SeqCst))
+        CANCEL.store(true, Ordering::Relaxed);
+        if !PAUSING.load(Ordering::Relaxed)
+            && (EXTRACTING.load(Ordering::Relaxed) || WORKER_MODE.load(Ordering::Relaxed))
         {
             return;
         }

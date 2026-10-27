@@ -7,7 +7,7 @@ struct CancelReset;
 
 impl Drop for CancelReset {
     fn drop(&mut self) {
-        CANCEL.store(false, Ordering::SeqCst);
+        CANCEL.store(false, Ordering::Relaxed);
     }
 }
 
@@ -17,7 +17,7 @@ fn cancelled_batch_exits_130() {
     let _reset = CancelReset;
     let input = directory.path().join("demo.dem.zst");
 
-    CANCEL.store(true, Ordering::SeqCst);
+    CANCEL.store(true, Ordering::Relaxed);
 
     let code = extract::run_extract_batch(
         &[input],

@@ -23,14 +23,14 @@ struct WorkerModeGuard;
 
 impl WorkerModeGuard {
     fn new() -> Self {
-        WORKER_MODE.store(true, Ordering::SeqCst);
+        WORKER_MODE.store(true, Ordering::Relaxed);
         Self
     }
 }
 
 impl Drop for WorkerModeGuard {
     fn drop(&mut self) {
-        WORKER_MODE.store(false, Ordering::SeqCst);
+        WORKER_MODE.store(false, Ordering::Relaxed);
     }
 }
 
@@ -285,7 +285,7 @@ pub fn collect_queued_files_with_timing(
     let mut last = start;
 
     loop {
-        if CANCEL.load(Ordering::SeqCst) {
+        if CANCEL.load(Ordering::Relaxed) {
             break;
         }
 
@@ -655,7 +655,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
     loop {
         let files = collect_queued_files(paths);
 
-        if CANCEL.load(Ordering::SeqCst) {
+        if CANCEL.load(Ordering::Relaxed) {
             output::cancelled();
             discard_queued_files(paths);
             cleanup_own_worker_pid(paths);
