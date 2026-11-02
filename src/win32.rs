@@ -1,13 +1,14 @@
 //! Windows platform bindings for Shell operations, WinRT notifications, and console buffers.
 
-use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
-use windows::Win32::Foundation::{CloseHandle, E_ABORT};
+use windows::Win32::Foundation::E_ABORT;
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
@@ -18,17 +19,15 @@ use windows::Win32::System::Console::{
     GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE, SetConsoleCursorPosition,
 };
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
-use windows::Win32::System::Threading::{
-    CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOW,
-};
+use windows::Win32::System::Threading::{CREATE_NEW_CONSOLE, CREATE_NO_WINDOW};
 use windows::Win32::UI::Shell::{
     FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING,
     FOFX_RECYCLEONDELETE, FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE, MessageBoxW, SW_HIDE,
+    MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE, MessageBoxW,
 };
-use windows::core::{HSTRING, PCWSTR, PWSTR, h};
+use windows::core::{HSTRING, PCWSTR, h};
 
 const APP_AUMID: &str = "FaceitDemoExtractor";
 const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
@@ -256,28 +255,19 @@ fn strip_extended_prefix(path: &Path) -> PathBuf {
     }
 }
 
-fn push_quoted(target: &mut Vec<u16>, value: &OsStr) {
-    target.push(u16::from(b'"'));
-
-    let mut backslashes = 0;
-    for unit in value.encode_wide() {
-        if unit == u16::from(b'\\') {
-            backslashes += 1;
-            continue;
-        }
-
-        if unit == u16::from(b'"') {
-            target.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2 + 1));
-            target.push(u16::from(b'"'));
-        } else {
-            target.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes));
-            target.push(unit);
-        }
-        backslashes = 0;
-    }
-
-    target.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2));
-    target.push(u16::from(b'"'));
+/// Spawns a console process for `exe` with `args`, optionally hidden without a console window.
+///
+/// # Errors
+///
+/// Returns a [`Win32Error`] if process creation fails.
+pub fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), Win32Error> {
+    let flags = if hidden {
+        CREATE_NO_WINDOW.0
+    } else {
+        CREATE_NEW_CONSOLE.0
+    };
+    Command::new(exe).args(args).creation_flags(flags).spawn()?;
+    Ok(())
 }
 
 /// Spawns a new independent visible console process for `exe` with `args`.
@@ -296,63 +286,6 @@ pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
 /// Returns a [`Win32Error`] if process creation fails.
 pub fn spawn_hidden_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
     spawn_console(exe, args, true)
-}
-
-fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), Win32Error> {
-    let application: Vec<u16> = exe
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    let mut command_line: Vec<u16> = Vec::new();
-    push_quoted(&mut command_line, exe.as_os_str());
-    for arg in args {
-        command_line.push(u16::from(b' '));
-        push_quoted(&mut command_line, OsStr::new(arg));
-    }
-    command_line.push(0);
-
-    let mut startup = STARTUPINFOW {
-        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-        ..Default::default()
-    };
-    if hidden {
-        startup.dwFlags = STARTF_USESHOWWINDOW;
-        startup.wShowWindow = SW_HIDE.0 as u16;
-    }
-    let mut process = PROCESS_INFORMATION::default();
-
-    // SAFETY: `application` and `command_line` are null-terminated wide strings;
-    // `startup` and `process` are properly initialized structs on the stack.
-    unsafe {
-        CreateProcessW(
-            PCWSTR(application.as_ptr()),
-            Some(PWSTR(command_line.as_mut_ptr())),
-            None,
-            None,
-            false,
-            CREATE_NEW_CONSOLE,
-            None,
-            PCWSTR::null(),
-            &startup,
-            &mut process,
-        )
-    }?;
-
-    // SAFETY: `process.hProcess` is a valid handle returned by successful CreateProcessW.
-    // INTENTIONAL: The child process was successfully spawned; closing handles detaches it.
-    // Handle close failures are logged as warnings and cannot undo the process creation.
-    if let Err(err) = unsafe { CloseHandle(process.hProcess) } {
-        crate::output::warn(format!("failed to close process handle: {err}"));
-    }
-    // SAFETY: `process.hThread` is a valid handle returned by successful CreateProcessW.
-    // INTENTIONAL: Child thread handle close failure is non-fatal and does not affect the spawned process.
-    if let Err(err) = unsafe { CloseHandle(process.hThread) } {
-        crate::output::warn(format!("failed to close thread handle: {err}"));
-    }
-
-    Ok(())
 }
 
 fn register_app_aumid() -> Result<(), Win32Error> {
@@ -449,21 +382,10 @@ pub fn message_box_info(title: &str, text: &str) {
 mod tests {
     use super::*;
 
-    fn quoted(value: &str) -> String {
-        let mut buffer = Vec::new();
-        push_quoted(&mut buffer, OsStr::new(value));
-        String::from_utf16(&buffer).unwrap()
-    }
-
     #[test]
-    fn quoting_matches_windows_rules() {
-        assert_eq!(quoted("plain"), "\"plain\"");
-        assert_eq!(quoted(r"C:\folder\"), "\"C:\\folder\\\\\"");
-        assert_eq!(quoted("a\"b"), "\"a\\\"b\"");
-        assert_eq!(
-            quoted("a\\\\\"b"),
-            format!("\"a{}{}b\"", "\\".repeat(5), '"')
-        );
+    fn spawn_console_fails_for_nonexistent_exe() {
+        let res = spawn_console(Path::new("C:\\nonexistent_binary_xyz_123.exe"), &[], false);
+        assert!(res.is_err());
     }
 
     #[test]
@@ -484,19 +406,6 @@ mod tests {
             strip_extended_prefix(Path::new(r"foo\bar")),
             PathBuf::from(r"foo\bar")
         );
-    }
-
-    #[test]
-    fn quoting_preserves_non_unicode_paths() {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::OsStringExt;
-
-        let value = OsString::from_wide(&[0xD800]);
-        let path = Path::new(&value);
-        let mut buffer = Vec::new();
-        push_quoted(&mut buffer, path.as_os_str());
-
-        assert_eq!(buffer, vec![u16::from(b'"'), 0xD800, u16::from(b'"')]);
     }
 
     #[test]
