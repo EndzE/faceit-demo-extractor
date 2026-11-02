@@ -413,14 +413,12 @@ fn menu_remove() {
     }
 }
 
-fn menu_change_filename(paths: &Paths) {
-    let current = config::load_config(&paths.config).target_filename;
-
+fn menu_change_filename(paths: &Paths, config: &mut config::Config) {
     println!("{}", output::section("Demo filename"));
     println!(
         "  {}  {}",
         output::label("Current"),
-        output::strong(&current)
+        output::strong(&config.target_filename)
     );
 
     let Some(input) = read_line("  New demo filename (Enter to cancel): ") else {
@@ -454,6 +452,8 @@ fn menu_change_filename(paths: &Paths) {
         return;
     }
 
+    config.target_filename = new_name.clone();
+
     println!(
         "  {} New demos will be written as {}.",
         output::good("Saved."),
@@ -475,11 +475,12 @@ fn menu_change_filename(paths: &Paths) {
     }
 }
 
-fn menu_toggle_keep_zst(paths: &Paths) {
-    let keep = !config::load_config(&paths.config).keep_zst;
+fn menu_toggle_keep_zst(paths: &Paths, config: &mut config::Config) {
+    let keep = !config.keep_zst;
 
     match config::save_config(&paths.config, &[("keep_zst", Value::Bool(keep))]) {
         Ok(()) => {
+            config.keep_zst = keep;
             if keep {
                 println!("  {} Original archives will be kept.", output::good("On."));
             } else {
@@ -493,14 +494,15 @@ fn menu_toggle_keep_zst(paths: &Paths) {
     }
 }
 
-fn menu_toggle_recycle_bin(paths: &Paths) {
-    let recycle = !config::load_config(&paths.config).move_to_recycle_bin;
+fn menu_toggle_recycle_bin(paths: &Paths, config: &mut config::Config) {
+    let recycle = !config.move_to_recycle_bin;
 
     match config::save_config(
         &paths.config,
         &[("move_to_recycle_bin", Value::Bool(recycle))],
     ) {
         Ok(()) => {
+            config.move_to_recycle_bin = recycle;
             if recycle {
                 println!(
                     "  {} Removed archives will be moved to the Recycle Bin.",
@@ -517,11 +519,12 @@ fn menu_toggle_recycle_bin(paths: &Paths) {
     }
 }
 
-fn menu_toggle_rename_demo(paths: &Paths) {
-    let rename = !config::load_config(&paths.config).rename_demo;
+fn menu_toggle_rename_demo(paths: &Paths, config: &mut config::Config) {
+    let rename = !config.rename_demo;
 
     match config::save_config(&paths.config, &[("rename_demo", Value::Bool(rename))]) {
         Ok(()) => {
+            config.rename_demo = rename;
             if rename {
                 println!(
                     "  {} Demos will be renamed during extraction.",
@@ -553,8 +556,8 @@ fn menu_toggle_rename_demo(paths: &Paths) {
     }
 }
 
-fn menu_toggle_notifications(paths: &Paths) {
-    let notifications = !config::load_config(&paths.config).notifications_instead_of_console;
+fn menu_toggle_notifications(paths: &Paths, config: &mut config::Config) {
+    let notifications = !config.notifications_instead_of_console;
 
     match config::save_config(
         &paths.config,
@@ -564,6 +567,7 @@ fn menu_toggle_notifications(paths: &Paths) {
         )],
     ) {
         Ok(()) => {
+            config.notifications_instead_of_console = notifications;
             if notifications {
                 println!(
                     "  {} Right-click extractions will run hidden and report with a notification.",
@@ -580,7 +584,7 @@ fn menu_toggle_notifications(paths: &Paths) {
     }
 }
 
-fn menu_change_delimiter(paths: &Paths) {
+fn menu_change_delimiter(paths: &Paths, config: &mut config::Config) {
     println!("{}", output::section("Change numbering delimiter"));
     println!(
         "  {}",
@@ -618,11 +622,14 @@ fn menu_change_delimiter(paths: &Paths) {
         &paths.config,
         &[("delimiter", Value::String(delimiter.to_string()))],
     ) {
-        Ok(()) => println!(
-            "  {} Delimiter set to {}.",
-            output::good("Saved."),
-            output::strong(format!("\"{delimiter}\""))
-        ),
+        Ok(()) => {
+            config.delimiter = delimiter.to_string();
+            println!(
+                "  {} Delimiter set to {}.",
+                output::good("Saved."),
+                output::strong(format!("\"{delimiter}\""))
+            );
+        }
         Err(message) => output::error(message),
     }
 }
@@ -648,6 +655,7 @@ fn menu_option_disabled(key: &str, name: &str, value: Option<&str>) -> String {
 
 fn run_menu(paths: &Paths) -> i32 {
     let mut first = true;
+    let mut config = config::load_config(&paths.config);
 
     loop {
         if !first {
@@ -655,7 +663,6 @@ fn run_menu(paths: &Paths) -> i32 {
         }
         first = false;
 
-        let config = config::load_config(&paths.config);
         let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
         let menu_state = registry::context_menu_state(paths);
 
@@ -776,10 +783,10 @@ fn run_menu(paths: &Paths) -> i32 {
             "0" | "q" | "quit" | "exit" => break,
             "1" => menu_install(paths),
             "2" => menu_remove(),
-            "3" => menu_toggle_rename_demo(paths),
+            "3" => menu_toggle_rename_demo(paths, &mut config),
             "4" => {
                 if config.rename_demo {
-                    menu_change_filename(paths);
+                    menu_change_filename(paths, &mut config);
                 } else {
                     println!(
                         "  {}",
@@ -791,7 +798,7 @@ fn run_menu(paths: &Paths) -> i32 {
             }
             "5" => {
                 if config.rename_demo {
-                    menu_change_delimiter(paths);
+                    menu_change_delimiter(paths, &mut config);
                 } else {
                     println!(
                         "  {}",
@@ -799,9 +806,9 @@ fn run_menu(paths: &Paths) -> i32 {
                     );
                 }
             }
-            "6" => menu_toggle_keep_zst(paths),
-            "7" => menu_toggle_recycle_bin(paths),
-            "8" => menu_toggle_notifications(paths),
+            "6" => menu_toggle_keep_zst(paths, &mut config),
+            "7" => menu_toggle_recycle_bin(paths, &mut config),
+            "8" => menu_toggle_notifications(paths, &mut config),
             _ => println!(
                 "  {}",
                 output::caution(format!("Unknown option: {choice}. Choose 0-8."))
