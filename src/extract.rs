@@ -983,7 +983,6 @@ pub fn run_extract_batch_outcome(
     println!();
 
     let total = files.len();
-    let (stem, ext) = split_ext(target);
     let mut extracted: Vec<String> = Vec::new();
     let mut failed: Vec<&Path> = Vec::new();
 
@@ -1010,23 +1009,24 @@ pub fn run_extract_batch_outcome(
             );
         }
 
-        let out_name = if !config.rename_demo {
-            let natural = uncompressed_demo_name(input);
-            if (total == 1 && config.overwrite_single_file_extraction)
-                || !csgo.join(&natural).exists()
-            {
-                natural
-            } else {
-                let (stem, ext) = split_ext(&natural);
-                next_free_name(csgo, stem, ext, &config.delimiter)
-            }
-        } else if total == 1 {
-            if config.overwrite_single_file_extraction || !csgo.join(target).exists() {
-                target.clone()
-            } else {
-                next_free_name(csgo, stem, ext, &config.delimiter)
-            }
+        let base_name = if config.rename_demo {
+            target.clone()
         } else {
+            uncompressed_demo_name(input)
+        };
+
+        let can_use_base = if total == 1 && config.overwrite_single_file_extraction {
+            true
+        } else if config.rename_demo && total > 1 {
+            false
+        } else {
+            !csgo.join(&base_name).exists()
+        };
+
+        let out_name = if can_use_base {
+            base_name
+        } else {
+            let (stem, ext) = split_ext(&base_name);
             next_free_name(csgo, stem, ext, &config.delimiter)
         };
         let output_path = csgo.join(&out_name);
