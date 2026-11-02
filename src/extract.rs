@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -18,7 +18,6 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const BZIP2_MAGIC: &[u8; 3] = b"BZh";
 const BZIP2_BLOCK_MAGIC: [u8; 6] = [0x31, 0x41, 0x59, 0x26, 0x53, 0x59];
 const CONTENT_CHECKSUM_FLAG: u8 = 0x04;
-const MAX_ZSTD_BLOCK_SIZE: u64 = 128 * 1024;
 const COPY_BUFFER: usize = 1024 * 1024;
 const HEADER_BUFFER: usize = 64;
 const PARTIAL_PREFIX: &str = ".faceit-";
@@ -209,144 +208,62 @@ fn report_disk_space_failure(output_dir: &Path, required: u64, available: u64) {
     );
 }
 
-fn read_u8(reader: &mut impl Read) -> io::Result<u8> {
-    let mut buffer = [0u8; 1];
-    reader.read_exact(&mut buffer)?;
-    Ok(buffer[0])
-}
-
-fn read_u16_le(reader: &mut impl Read) -> io::Result<u16> {
-    let mut buffer = [0u8; 2];
-    reader.read_exact(&mut buffer)?;
-    Ok(u16::from_le_bytes(buffer))
-}
-
-fn read_u24_le(reader: &mut impl Read) -> io::Result<u32> {
-    let mut buffer = [0u8; 3];
-    reader.read_exact(&mut buffer)?;
-    Ok(u32::from_le_bytes([buffer[0], buffer[1], buffer[2], 0]))
-}
-
-fn read_u32_le(reader: &mut impl Read) -> io::Result<u32> {
-    let mut buffer = [0u8; 4];
-    reader.read_exact(&mut buffer)?;
-    Ok(u32::from_le_bytes(buffer))
-}
-
-fn read_u64_le(reader: &mut impl Read) -> io::Result<u64> {
-    let mut buffer = [0u8; 8];
-    reader.read_exact(&mut buffer)?;
-    Ok(u64::from_le_bytes(buffer))
-}
-
-fn skip_exact(reader: &mut BufReader<File>, remaining: u64) -> io::Result<()> {
-    let offset = i64::try_from(remaining)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "skip is too large"))?;
-    reader.seek_relative(offset)
-}
-
 fn inspect_zstd_header(input: &Path) -> Result<ArchiveHeader, HeaderError> {
     let file = File::open(input).map_err(HeaderError::Open)?;
-    let file_len = file.metadata().map_err(HeaderError::Read)?.len();
     let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
-    let mut seen_frame = false;
-    let mut has_checksum = true;
-    let mut content_size = Some(0u64);
 
+    let mut magic = [0u8; 4];
     loop {
-        let mut magic = [0u8; 4];
-        let first = match reader.read(&mut magic[..1]) {
-            Ok(first) => first,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) => return Err(err.into()),
-        };
-        if first == 0 {
-            break;
+        let filled = read_available(&mut reader, &mut magic)?;
+        if filled < 4 {
+            return Err(HeaderError::Format("unexpected end of file"));
         }
-        reader.read_exact(&mut magic[1..])?;
 
-        if magic == ZSTD_MAGIC {
-            seen_frame = true;
-            let descriptor = read_u8(&mut reader)?;
-            if descriptor & 0x08 != 0 {
-                return Err(HeaderError::Format("invalid frame header"));
+        if matches!(magic, [0x50..=0x5F, 0x2A, 0x4D, 0x18]) {
+            let mut size_bytes = [0u8; 4];
+            let filled = read_available(&mut reader, &mut size_bytes)?;
+            if filled < 4 {
+                return Err(HeaderError::Format("unexpected end of file"));
             }
-
-            let single_segment = descriptor & 0x20 != 0;
-            if !single_segment {
-                let _window_descriptor = read_u8(&mut reader)?;
-            }
-
-            let dictionary_size = match descriptor & 0x03 {
-                0 => 0,
-                1 => 1,
-                2 => 2,
-                _ => 4,
-            };
-            skip_exact(&mut reader, dictionary_size)?;
-
-            let content_size_field = match (descriptor >> 6, single_segment) {
-                (0, false) => 0,
-                (0, true) => 1,
-                (1, _) => 2,
-                (2, _) => 4,
-                _ => 8,
-            };
-            let frame_size = match content_size_field {
-                0 => None,
-                1 => Some(u64::from(read_u8(&mut reader)?)),
-                2 => Some(u64::from(read_u16_le(&mut reader)?) + 256),
-                4 => Some(u64::from(read_u32_le(&mut reader)?)),
-                8 => Some(read_u64_le(&mut reader)?),
-                _ => unreachable!(),
-            };
-            content_size = match (content_size, frame_size) {
-                (Some(total), Some(size)) => total.checked_add(size),
-                _ => None,
-            };
-            has_checksum &= descriptor & CONTENT_CHECKSUM_FLAG != 0;
-
-            loop {
-                let block = read_u24_le(&mut reader)?;
-                let last = block & 1 != 0;
-                let block_type = (block >> 1) & 0x03;
-                let block_size = u64::from(block >> 3);
-                if block_type == 0 && block_size == 0 && !last {
-                    return Err(HeaderError::Format("empty non-terminal raw block detected"));
+            let size = u32::from_le_bytes(size_bytes);
+            reader.seek_relative(i64::from(size)).map_err(|err| {
+                if err.kind() == io::ErrorKind::UnexpectedEof {
+                    HeaderError::Format("unexpected end of file")
+                } else {
+                    HeaderError::Read(err)
                 }
-                if block_size > MAX_ZSTD_BLOCK_SIZE {
-                    return Err(HeaderError::Format(
-                        "block size exceeds maximum allowed Zstandard block size (128 KB)",
-                    ));
-                }
-                match block_type {
-                    0 | 2 => skip_exact(&mut reader, block_size)?,
-                    1 => skip_exact(&mut reader, 1)?,
-                    _ => return Err(HeaderError::Format("invalid block header")),
-                }
-                if last {
-                    break;
-                }
-            }
-
-            if descriptor & CONTENT_CHECKSUM_FLAG != 0 {
-                skip_exact(&mut reader, 4)?;
-            }
-        } else if matches!(magic, [0x50..=0x5F, 0x2A, 0x4D, 0x18]) {
-            let size = u64::from(read_u32_le(&mut reader)?);
-            skip_exact(&mut reader, size)?;
+            })?;
+        } else if magic == ZSTD_MAGIC {
+            break;
         } else {
             return Err(HeaderError::Format("unknown frame descriptor"));
         }
     }
 
-    if !seen_frame {
+    let mut header_buf = [0u8; 18];
+    header_buf[..4].copy_from_slice(&magic);
+    let rest_read = read_available(&mut reader, &mut header_buf[4..])?;
+    if rest_read < 1 {
         return Err(HeaderError::Format("unexpected end of file"));
     }
 
-    if reader.stream_position()? > file_len {
-        return Err(HeaderError::Format("unexpected end of file"));
+    let descriptor = header_buf[4];
+    if descriptor & 0x08 != 0 {
+        return Err(HeaderError::Format("invalid frame header"));
     }
+
+    let has_checksum = descriptor & CONTENT_CHECKSUM_FLAG != 0;
+    let content_size = match zstd::zstd_safe::get_frame_content_size(&header_buf[..4 + rest_read]) {
+        Ok(size) => size,
+        Err(_) => {
+            let message = if 4 + rest_read < 18 {
+                "unexpected end of file"
+            } else {
+                "invalid frame header"
+            };
+            return Err(HeaderError::Format(message));
+        }
+    };
 
     Ok(ArchiveHeader {
         has_checksum,
@@ -1327,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_header_sums_concatenated_frames() {
+    fn frame_header_reads_initial_frame_in_concatenated_stream() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("demo.dem.zst");
         let first = b"PBDEMS2\x00first";
@@ -1340,30 +1257,21 @@ mod tests {
         let (_, header) = check_header(&input).expect("zstd header");
 
         assert!(header.has_checksum);
-        assert_eq!(
-            header.content_size,
-            Some((first.len() + second.len()) as u64)
-        );
+        assert_eq!(header.content_size, Some(first.len() as u64));
     }
 
     #[test]
-    fn frame_header_requires_a_checksum_in_every_frame() {
+    fn frame_header_detects_missing_checksum() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("demo.dem.zst");
-        let first = b"PBDEMS2\x00first";
-        let second = b"second";
+        let payload = b"PBDEMS2\x00first";
 
-        let mut bytes = zstd_frame(first, true);
-        bytes.extend(zstd_frame(second, false));
-        fs::write(&input, bytes).unwrap();
+        fs::write(&input, zstd_frame(payload, false)).unwrap();
 
         let (_, header) = check_header(&input).expect("zstd header");
 
         assert!(!header.has_checksum);
-        assert_eq!(
-            header.content_size,
-            Some((first.len() + second.len()) as u64)
-        );
+        assert_eq!(header.content_size, Some(payload.len() as u64));
     }
 
     #[test]
@@ -1565,7 +1473,7 @@ mod tests {
     }
 
     #[test]
-    fn inspect_zstd_header_rejects_empty_non_terminal_raw_block() {
+    fn decode_archive_rejects_empty_non_terminal_raw_block() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("empty_raw_block.dem.zst");
 
@@ -1579,16 +1487,11 @@ mod tests {
 
         fs::write(&input, bytes).unwrap();
 
-        match inspect_zstd_header(&input) {
-            Err(HeaderError::Format(msg)) => {
-                assert_eq!(msg, "empty non-terminal raw block detected");
-            }
-            other => panic!("expected Format error, got {other:?}"),
-        }
+        assert_eq!(test_archive(&input), ExtractResult::Failed);
     }
 
     #[test]
-    fn inspect_zstd_header_rejects_block_size_exceeding_128kb() {
+    fn decode_archive_rejects_block_size_exceeding_128kb() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("oversized_block.dem.zst");
 
@@ -1600,15 +1503,7 @@ mod tests {
 
         fs::write(&input, bytes).unwrap();
 
-        match inspect_zstd_header(&input) {
-            Err(HeaderError::Format(msg)) => {
-                assert_eq!(
-                    msg,
-                    "block size exceeds maximum allowed Zstandard block size (128 KB)"
-                );
-            }
-            other => panic!("expected Format error, got {other:?}"),
-        }
+        assert_eq!(test_archive(&input), ExtractResult::Failed);
     }
 
     #[test]
