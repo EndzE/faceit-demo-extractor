@@ -30,7 +30,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, PCWSTR, h};
 
-const APP_AUMID: &str = "FaceitDemoExtractor";
 const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
 static APP_AUMID_REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -325,7 +324,7 @@ pub fn notify(title: &str, message: &str) -> Result<(), Win32Error> {
 
     let document = create_toast_document(title, message)?;
     let toast = ToastNotification::CreateToastNotification(&document)?;
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_AUMID))?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(h!("FaceitDemoExtractor"))?;
     notifier.Show(&toast)?;
 
     // WinRT ToastNotifier::Show transmits notifications via asynchronous RPC to the

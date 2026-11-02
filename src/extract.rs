@@ -446,7 +446,7 @@ fn cleanup_orphaned_partials(directory: &Path) {
 }
 
 fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
-    if let (Ok(left), Ok(right)) = (fs::canonicalize(left), fs::canonicalize(right)) {
+    if let (Ok(right), Ok(left)) = (fs::canonicalize(right), fs::canonicalize(left)) {
         return left == right;
     }
 

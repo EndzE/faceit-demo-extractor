@@ -139,12 +139,12 @@ pub fn sanitize_demo_filename(raw: &str) -> String {
     let (stem, ext) = if let Some(dot) = base.rfind('.') {
         let ext = &base[dot..];
         if ext.eq_ignore_ascii_case(".dem") {
-            (base[..dot].to_string(), ext)
+            (&base[..dot], ext)
         } else {
-            (base.to_string(), ".dem")
+            (base, ".dem")
         }
     } else {
-        (base.to_string(), ".dem")
+        (base, ".dem")
     };
 
     // Replace invalid characters in stem

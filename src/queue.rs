@@ -70,7 +70,7 @@ const UTF16_LE_BOM: [u8; 2] = [0xFF, 0xFE];
 
 fn encode_queue_path(path: &Path) -> Vec<u8> {
     let wide = path.as_os_str().encode_wide();
-    let mut bytes = Vec::with_capacity(UTF16_LE_BOM.len() + wide.size_hint().0 * 2);
+    let mut bytes = Vec::with_capacity(UTF16_LE_BOM.len() + path.as_os_str().len() * 2);
     bytes.extend_from_slice(&UTF16_LE_BOM);
     for unit in wide {
         bytes.extend_from_slice(&unit.to_le_bytes());

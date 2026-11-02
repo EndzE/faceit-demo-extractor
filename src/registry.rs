@@ -188,19 +188,16 @@ pub fn remove_context_menu_at(root: &str) -> Result<(), RegistryError> {
     }
 }
 
-fn install_context_menu_with(paths: &Paths, root: &str) -> Result<(), RegistryError> {
-    ensure_install_binaries(paths)?;
-    install_context_menu_at(root, MENU_LABEL, &build_context_menu_command(paths))
-}
-
 /// Registers all Explorer context menus defined in [`CTX_MENUS`].
 ///
 /// # Errors
 ///
 /// Returns a [`RegistryError`] if binary verification or registry creation fails.
 pub fn perform_install(paths: &Paths) -> Result<(), RegistryError> {
+    ensure_install_binaries(paths)?;
+    let command = build_context_menu_command(paths);
     for menu in CTX_MENUS {
-        install_context_menu_with(paths, menu.key)?;
+        install_context_menu_at(menu.key, MENU_LABEL, &command)?;
     }
     Ok(())
 }
