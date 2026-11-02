@@ -248,15 +248,6 @@ fn parse_config_json(bytes: &[u8]) -> Result<Map<String, Value>, String> {
     }
 }
 
-/// Reads and parses the raw JSON map from the config file, returning an empty map on failure.
-#[must_use]
-pub fn read_config_json(path: &Path) -> Map<String, Value> {
-    let Ok(bytes) = fs::read(path) else {
-        return Map::new();
-    };
-    parse_config_json(&bytes).unwrap_or_default()
-}
-
 /// Loads application configuration from `path`, returning default values if the file is missing or invalid.
 #[must_use]
 pub fn load_config(path: &Path) -> Config {
