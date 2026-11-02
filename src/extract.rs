@@ -19,7 +19,6 @@ const BZIP2_MAGIC: &[u8; 3] = b"BZh";
 const BZIP2_BLOCK_MAGIC: [u8; 6] = [0x31, 0x41, 0x59, 0x26, 0x53, 0x59];
 const CONTENT_CHECKSUM_FLAG: u8 = 0x04;
 const COPY_BUFFER: usize = 1024 * 1024;
-const HEADER_BUFFER: usize = 64;
 const PARTIAL_PREFIX: &str = ".faceit-";
 const PARTIAL_SUFFIX: &str = ".partial";
 const ORPHANED_PARTIAL_AGE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -36,7 +35,6 @@ pub enum ExtractResult {
 }
 
 enum CopyError {
-    Open(String),
     Io(io::Error),
     Codec(ArchiveFormat, String),
     Magic,
@@ -84,17 +82,8 @@ struct ArchiveHeader {
 enum HeaderError {
     Open(io::Error),
     Read(io::Error),
-    Format(&'static str),
-}
-
-impl From<io::Error> for HeaderError {
-    fn from(err: io::Error) -> Self {
-        if err.kind() == io::ErrorKind::UnexpectedEof {
-            HeaderError::Format("unexpected end of file")
-        } else {
-            HeaderError::Read(err)
-        }
-    }
+    Unrecognized(Vec<u8>),
+    Codec(ArchiveFormat, &'static str),
 }
 
 fn hex_preview(bytes: &[u8]) -> String {
@@ -165,7 +154,6 @@ fn report_permission_denied(output_dir: &Path) {
 
 fn report_decode_failure(copy_error: CopyError, head: &[u8], output_dir: &Path) -> ExtractResult {
     match copy_error {
-        CopyError::Open(message) => error(format!("could not open the archive: {message}")),
         CopyError::Magic => report_magic_failure(head),
         CopyError::Cancelled => return ExtractResult::Cancelled,
         CopyError::Codec(format, message) => report_codec_failure(format, &message),
@@ -193,69 +181,6 @@ fn report_disk_space_failure(output_dir: &Path, required: u64, available: u64) {
     );
 }
 
-fn inspect_zstd_header(input: &Path) -> Result<ArchiveHeader, HeaderError> {
-    let file = File::open(input).map_err(HeaderError::Open)?;
-    let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
-
-    let mut magic = [0u8; 4];
-    loop {
-        let filled = read_available(&mut reader, &mut magic)?;
-        if filled < 4 {
-            return Err(HeaderError::Format("unexpected end of file"));
-        }
-
-        if matches!(magic, [0x50..=0x5F, 0x2A, 0x4D, 0x18]) {
-            let mut size_bytes = [0u8; 4];
-            let filled = read_available(&mut reader, &mut size_bytes)?;
-            if filled < 4 {
-                return Err(HeaderError::Format("unexpected end of file"));
-            }
-            let size = u32::from_le_bytes(size_bytes);
-            reader.seek_relative(i64::from(size)).map_err(|err| {
-                if err.kind() == io::ErrorKind::UnexpectedEof {
-                    HeaderError::Format("unexpected end of file")
-                } else {
-                    HeaderError::Read(err)
-                }
-            })?;
-        } else if magic == ZSTD_MAGIC {
-            break;
-        } else {
-            return Err(HeaderError::Format("unknown frame descriptor"));
-        }
-    }
-
-    let mut header_buf = [0u8; 18];
-    header_buf[..4].copy_from_slice(&magic);
-    let rest_read = read_available(&mut reader, &mut header_buf[4..])?;
-    if rest_read < 1 {
-        return Err(HeaderError::Format("unexpected end of file"));
-    }
-
-    let descriptor = header_buf[4];
-    if descriptor & 0x08 != 0 {
-        return Err(HeaderError::Format("invalid frame header"));
-    }
-
-    let has_checksum = descriptor & CONTENT_CHECKSUM_FLAG != 0;
-    let content_size = match zstd::zstd_safe::get_frame_content_size(&header_buf[..4 + rest_read]) {
-        Ok(size) => size,
-        Err(_) => {
-            let message = if 4 + rest_read < 18 {
-                "unexpected end of file"
-            } else {
-                "invalid frame header"
-            };
-            return Err(HeaderError::Format(message));
-        }
-    };
-
-    Ok(ArchiveHeader {
-        has_checksum,
-        content_size,
-    })
-}
-
 fn read_available(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
     while filled < buffer.len() {
@@ -269,106 +194,134 @@ fn read_available(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize
     Ok(filled)
 }
 
-#[derive(Debug)]
-enum DetectedFormat {
-    Zstd,
-    Bzip2,
-    Unrecognized { head: Vec<u8> },
+fn inspect_stream_header(
+    reader: &mut BufReader<File>,
+) -> Result<(ArchiveFormat, ArchiveHeader), HeaderError> {
+    let mut magic = [0u8; 4];
+    let filled = read_available(reader, &mut magic).map_err(HeaderError::Read)?;
+    if filled < 4 {
+        return Err(HeaderError::Unrecognized(magic[..filled].to_vec()));
+    }
+
+    if magic.starts_with(BZIP2_MAGIC) && (b'1'..=b'9').contains(&magic[3]) {
+        let mut block_magic = [0u8; 6];
+        let filled = read_available(reader, &mut block_magic).map_err(HeaderError::Read)?;
+        if filled < 6 || block_magic != BZIP2_BLOCK_MAGIC {
+            return Err(HeaderError::Codec(
+                ArchiveFormat::Bzip2,
+                "invalid block header",
+            ));
+        }
+        reader.seek_relative(-10).map_err(HeaderError::Read)?;
+        return Ok((
+            ArchiveFormat::Bzip2,
+            ArchiveHeader {
+                has_checksum: true,
+                content_size: None,
+            },
+        ));
+    }
+
+    while matches!(magic, [0x50..=0x5F, 0x2A, 0x4D, 0x18]) {
+        let mut size_bytes = [0u8; 4];
+        let filled = read_available(reader, &mut size_bytes).map_err(HeaderError::Read)?;
+        if filled < 4 {
+            return Err(HeaderError::Codec(
+                ArchiveFormat::Zstd,
+                "unexpected end of file",
+            ));
+        }
+        let size = u32::from_le_bytes(size_bytes);
+        reader.seek_relative(i64::from(size)).map_err(|err| {
+            if err.kind() == io::ErrorKind::UnexpectedEof {
+                HeaderError::Codec(ArchiveFormat::Zstd, "unexpected end of file")
+            } else {
+                HeaderError::Read(err)
+            }
+        })?;
+        let filled = read_available(reader, &mut magic).map_err(HeaderError::Read)?;
+        if filled < 4 {
+            return Err(HeaderError::Codec(
+                ArchiveFormat::Zstd,
+                "unexpected end of file",
+            ));
+        }
+    }
+
+    if magic != ZSTD_MAGIC {
+        return Err(HeaderError::Unrecognized(magic.to_vec()));
+    }
+
+    let mut header_buf = [0u8; 18];
+    header_buf[..4].copy_from_slice(&magic);
+    let rest_read = read_available(reader, &mut header_buf[4..]).map_err(HeaderError::Read)?;
+    if rest_read < 1 {
+        return Err(HeaderError::Codec(
+            ArchiveFormat::Zstd,
+            "unexpected end of file",
+        ));
+    }
+
+    let descriptor = header_buf[4];
+    if descriptor & 0x08 != 0 {
+        return Err(HeaderError::Codec(
+            ArchiveFormat::Zstd,
+            "invalid frame header",
+        ));
+    }
+
+    let has_checksum = descriptor & CONTENT_CHECKSUM_FLAG != 0;
+    let frame_header_slice = &header_buf[..4 + rest_read];
+    let content_size = match zstd::zstd_safe::get_frame_content_size(frame_header_slice) {
+        Ok(size) => size,
+        Err(_) => {
+            let message = if frame_header_slice.len() < 18 {
+                "unexpected end of file"
+            } else {
+                "invalid frame header"
+            };
+            return Err(HeaderError::Codec(ArchiveFormat::Zstd, message));
+        }
+    };
+
+    reader
+        .seek_relative(-((4 + rest_read) as i64))
+        .map_err(HeaderError::Read)?;
+
+    Ok((
+        ArchiveFormat::Zstd,
+        ArchiveHeader {
+            has_checksum,
+            content_size,
+        },
+    ))
 }
 
-fn detect_format(input: &Path) -> Result<DetectedFormat, HeaderError> {
+fn open_archive_file(
+    input: &Path,
+) -> Result<(BufReader<File>, ArchiveFormat, ArchiveHeader), HeaderError> {
     let file = File::open(input).map_err(HeaderError::Open)?;
-    let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
-    let mut head = [0u8; 4];
-    let filled = read_available(&mut reader, &mut head).map_err(HeaderError::Read)?;
-
-    if filled != head.len() {
-        return Ok(DetectedFormat::Unrecognized {
-            head: head[..filled].to_vec(),
-        });
-    }
-    if head == ZSTD_MAGIC {
-        return Ok(DetectedFormat::Zstd);
-    }
-    if head.starts_with(BZIP2_MAGIC) && (b'1'..=b'9').contains(&head[3]) {
-        return Ok(DetectedFormat::Bzip2);
-    }
-    if matches!(head, [0x50..=0x5F, 0x2A, 0x4D, 0x18]) {
-        // a zstd stream may start with skippable frames; the frame parser
-        // itself decides whether what follows is actually valid
-        return Ok(DetectedFormat::Zstd);
-    }
-    Ok(DetectedFormat::Unrecognized {
-        head: head.to_vec(),
-    })
+    let mut reader = BufReader::with_capacity(COPY_BUFFER, file);
+    let (format, header) = inspect_stream_header(&mut reader)?;
+    Ok((reader, format, header))
 }
 
-fn inspect_bzip2_header(input: &Path) -> Result<ArchiveHeader, HeaderError> {
-    let file = File::open(input).map_err(HeaderError::Open)?;
-    let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
-
-    // detect_format already checked the "BZh" + level-digit magic; the first
-    // compressed block signature separates real streams from look-alikes
-    // before anything is written.
-    let mut head = [0u8; 10];
-    let filled = read_available(&mut reader, &mut head)?;
-    if filled < head.len()
-        || !head.starts_with(BZIP2_MAGIC)
-        || !(b'1'..=b'9').contains(&head[3])
-        || head[4..] != BZIP2_BLOCK_MAGIC
-    {
-        return Err(HeaderError::Format("invalid block header"));
-    }
-
-    // block CRCs and the combined stream CRC are verified by the decoder as
-    // the file is read, and a file cut short mid-block fails with an
-    // unexpected end of file; the decompressed length is unknown by design,
-    // so the free-space pre-check is skipped and the progress bar prints the
-    // amount decoded without a total.
-    Ok(ArchiveHeader {
-        has_checksum: true,
-        content_size: None,
-    })
-}
-
-fn check_header(input: &Path) -> Option<(ArchiveFormat, ArchiveHeader)> {
-    let format = match detect_format(input) {
-        Ok(DetectedFormat::Zstd) => ArchiveFormat::Zstd,
-        Ok(DetectedFormat::Bzip2) => ArchiveFormat::Bzip2,
-        Ok(DetectedFormat::Unrecognized { head }) => {
+fn open_archive(input: &Path) -> Option<(BufReader<File>, ArchiveFormat, ArchiveHeader)> {
+    match open_archive_file(input) {
+        Ok(archive) => Some(archive),
+        Err(HeaderError::Open(err)) => {
+            error(format!("could not open the archive: {err}"));
+            None
+        }
+        Err(HeaderError::Read(err)) => {
+            error(format!("could not read the archive header: {err}"));
+            None
+        }
+        Err(HeaderError::Unrecognized(head)) => {
             report_unrecognized_format(&head);
-            return None;
-        }
-        Err(HeaderError::Open(err)) => {
-            error(format!("could not open the archive: {err}"));
-            return None;
-        }
-        Err(HeaderError::Read(err)) => {
-            error(format!("could not read the archive header: {err}"));
-            return None;
-        }
-        Err(HeaderError::Format(message)) => {
-            error(format!("could not read the archive header: {message}"));
-            return None;
-        }
-    };
-
-    let inspected = match format {
-        ArchiveFormat::Zstd => inspect_zstd_header(input),
-        ArchiveFormat::Bzip2 => inspect_bzip2_header(input),
-    };
-
-    match inspected {
-        Ok(header) => Some((format, header)),
-        Err(HeaderError::Open(err)) => {
-            error(format!("could not open the archive: {err}"));
             None
         }
-        Err(HeaderError::Read(err)) => {
-            error(format!("could not read the archive header: {err}"));
-            None
-        }
-        Err(HeaderError::Format(message)) => {
+        Err(HeaderError::Codec(format, message)) => {
             report_codec_failure(format, message);
             None
         }
@@ -413,16 +366,13 @@ fn copy_payload(
 }
 
 fn decode_archive(
-    input: &Path,
+    reader: BufReader<File>,
     format: ArchiveFormat,
     writer: &mut impl Write,
     content_size: Option<u64>,
     head: &mut Vec<u8>,
     buffer: &mut [u8],
 ) -> Result<u64, CopyError> {
-    let file = File::open(input).map_err(|err| CopyError::Open(err.to_string()))?;
-    let reader = BufReader::with_capacity(COPY_BUFFER, file);
-
     let mut total = 0;
     let mut progress = output::Progress::new(content_size);
     progress.update(0);
@@ -552,7 +502,7 @@ pub fn extract_one_with_buffer(
         return ExtractResult::Failed;
     }
 
-    let Some((format, header)) = check_header(input) else {
+    let Some((reader, format, header)) = open_archive(input) else {
         return ExtractResult::Failed;
     };
     let has_checksum = header.has_checksum;
@@ -599,7 +549,7 @@ pub fn extract_one_with_buffer(
     let mut head = Vec::with_capacity(DEMO_MAGIC.len());
     let copy_result = {
         let mut writer = BufWriter::with_capacity(COPY_BUFFER, temp.as_file_mut());
-        let decoded = decode_archive(input, format, &mut writer, content_size, &mut head, buffer);
+        let decoded = decode_archive(reader, format, &mut writer, content_size, &mut head, buffer);
         match decoded {
             Ok(total) => match writer.flush() {
                 Ok(()) => Ok(total),
@@ -709,7 +659,7 @@ pub fn test_archive(input: &Path) -> ExtractResult {
         return ExtractResult::Failed;
     }
 
-    let Some((format, header)) = check_header(input) else {
+    let Some((reader, format, header)) = open_archive(input) else {
         return ExtractResult::Failed;
     };
 
@@ -721,7 +671,7 @@ pub fn test_archive(input: &Path) -> ExtractResult {
     let mut buffer = vec![0u8; COPY_BUFFER];
 
     match decode_archive(
-        input,
+        reader,
         format,
         &mut sink,
         header.content_size,
@@ -1129,6 +1079,10 @@ pub fn run_extract_batch_outcome(
 mod tests {
     use super::*;
 
+    fn check_header(input: &Path) -> Option<(ArchiveFormat, ArchiveHeader)> {
+        open_archive(input).map(|(_, format, header)| (format, header))
+    }
+
     #[test]
     fn test_archive_format_traits() {
         use std::collections::HashSet;
@@ -1172,6 +1126,7 @@ mod tests {
 
         assert!(header.has_checksum);
         assert_eq!(header.content_size, Some(payload.len() as u64));
+        assert_eq!(test_archive(&input), ExtractResult::Ok);
     }
 
     #[test]
@@ -1229,10 +1184,16 @@ mod tests {
         bytes.extend(zstd_frame(payload, true));
         fs::write(&input, bytes).unwrap();
 
-        let (_, header) = check_header(&input).expect("zstd header");
+        let (mut reader, format, header) = open_archive(&input).expect("zstd header");
 
+        assert_eq!(format, ArchiveFormat::Zstd);
         assert!(header.has_checksum);
         assert_eq!(header.content_size, Some(payload.len() as u64));
+
+        let mut out = Vec::new();
+        let mut decoder = zstd::stream::read::Decoder::with_buffer(&mut reader).unwrap();
+        decoder.read_to_end(&mut out).unwrap();
+        assert_eq!(out, payload);
     }
 
     #[test]
@@ -1450,10 +1411,10 @@ mod tests {
     }
 
     #[test]
-    fn detect_format_reports_open_error_for_missing_file() {
+    fn open_archive_reports_open_error_for_missing_file() {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("missing.dem.zst");
-        match detect_format(&missing) {
+        match open_archive_file(&missing) {
             Err(HeaderError::Open(_)) => {}
             other => panic!("expected HeaderError::Open, got {other:?}"),
         }

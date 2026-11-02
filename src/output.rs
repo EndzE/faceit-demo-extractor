@@ -233,6 +233,10 @@ impl Progress {
 
     /// Updates the displayed progress with the current number of bytes decoded.
     pub fn update(&mut self, current: u64) {
+        if self.total.is_some_and(|total| current > total) {
+            self.total = None;
+        }
+
         if !self.interactive {
             return;
         }
@@ -298,6 +302,16 @@ mod tests {
         assert_eq!(format_size(1024 * 1024), "1.0 MB");
         assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
         assert_eq!(format_size(1024u64.pow(4)), "1.0 TB");
+    }
+
+    #[test]
+    fn progress_drops_total_when_current_exceeds_total() {
+        let mut progress = Progress::new(Some(100));
+        assert_eq!(progress.total, Some(100));
+        progress.update(100);
+        assert_eq!(progress.total, Some(100));
+        progress.update(101);
+        assert_eq!(progress.total, None);
     }
 
     #[test]
