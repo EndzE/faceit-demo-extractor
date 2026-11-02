@@ -21,9 +21,6 @@ pub const CS2_REG_LOOKUP: &[(&str, &str)] = &[
     ),
 ];
 
-/// Relative path components from the CS2 root installation directory to the `csgo` folder.
-pub const CS2_CSGO_REL: &[&str] = &["game", "csgo"];
-
 fn decode_reg_string(raw: &RegValue) -> Option<String> {
     match raw.vtype {
         RegType::REG_SZ | RegType::REG_EXPAND_SZ => {}

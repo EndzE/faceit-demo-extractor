@@ -40,6 +40,7 @@ pub use crate::registry::RegistryError;
 pub use crate::validate::{is_valid_demo_filename, sanitize_demo_filename};
 pub use crate::win32::Win32Error;
 
+use std::panic::{self, PanicHookInfo};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -179,45 +180,42 @@ pub fn run_console() -> i32 {
     let _ = colored::control::set_virtual_terminal(true);
 
     install_ctrlc_handler();
+    install_panic_hook(false);
 
-    match std::panic::catch_unwind(cli::run) {
-        Ok(code) => code,
-        Err(payload) => {
-            let message = format!(
-                "unexpected internal error: {}",
-                panic_message(payload.as_ref())
+    cli::run()
+}
+
+/// Executes the quiet windowless entry point, returning the process exit code.
+pub fn run_quiet() -> i32 {
+    install_panic_hook(true);
+
+    cli::run_quiet()
+}
+
+fn install_panic_hook(is_quiet: bool) {
+    panic::set_hook(Box::new(move |info| {
+        let message = format_panic_info(info);
+        if is_quiet {
+            win32::message_box(
+                APP_NAME,
+                &format!("Unexpected internal error.\n\n{message}"),
             );
-            output::error(&message);
+        } else {
+            let error_text = format!("unexpected internal error: {message}");
+            output::error(&error_text);
 
             let notifications = std::env::args_os().any(|arg| arg == "--queue-worker")
                 && config::load_config(&Paths::discover().config).notifications_instead_of_console;
             if notifications {
-                if let Err(err) = win32::notify("Extraction failed", &message) {
+                if let Err(err) = win32::notify("Extraction failed", &error_text) {
                     output::warn(format!("failed to show error notification: {err}"));
                 }
             } else {
                 output::pause("Press Enter to close...");
             }
-            1
         }
-    }
-}
-
-/// Executes the quiet windowless entry point, returning the process exit code.
-pub fn run_quiet() -> i32 {
-    match std::panic::catch_unwind(cli::run_quiet) {
-        Ok(code) => code,
-        Err(payload) => {
-            win32::message_box(
-                APP_NAME,
-                &format!(
-                    "Unexpected internal error.\n\n{}",
-                    panic_message(payload.as_ref())
-                ),
-            );
-            1
-        }
-    }
+        std::process::exit(1);
+    }));
 }
 
 fn install_ctrlc_handler() {
@@ -235,6 +233,25 @@ fn install_ctrlc_handler() {
             "could not install the Ctrl+C handler; extraction cannot be cancelled cleanly",
         );
     }
+}
+
+fn format_panic_message(
+    payload: &(dyn std::any::Any + Send),
+    location: Option<(&str, u32)>,
+) -> String {
+    let msg = panic_message(payload);
+    if let Some((file, line)) = location {
+        format!("{msg} ({file}:{line})")
+    } else {
+        msg.to_string()
+    }
+}
+
+fn format_panic_info(info: &PanicHookInfo<'_>) -> String {
+    format_panic_message(
+        info.payload(),
+        info.location().map(|loc| (loc.file(), loc.line())),
+    )
 }
 
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
@@ -277,6 +294,21 @@ mod tests {
     fn test_panic_message_other() {
         let payload: Box<dyn std::any::Any + Send> = Box::new(42i32);
         assert_eq!(panic_message(payload.as_ref()), "unknown panic");
+    }
+
+    #[test]
+    fn test_format_panic_message_with_location() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("failure");
+        assert_eq!(
+            format_panic_message(payload.as_ref(), Some(("src/test.rs", 42))),
+            "failure (src/test.rs:42)"
+        );
+    }
+
+    #[test]
+    fn test_format_panic_message_without_location() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("failure");
+        assert_eq!(format_panic_message(payload.as_ref(), None), "failure");
     }
 
     #[test]
