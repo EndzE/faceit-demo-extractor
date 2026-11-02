@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::config::{self, Config};
 use crate::cs2;
 use crate::output::{self, error, warn};
-use crate::validate::{DemoFileName, utf16_len};
+use crate::validate::{is_valid_demo_filename, sanitize_demo_filename, utf16_len};
 use crate::win32;
 use crate::{CANCEL, DEMO_MAGIC, EXTRACTING, MAX_FILENAME_LEN, Paths};
 
@@ -562,7 +562,7 @@ pub fn extract_one_with_buffer(
         return ExtractResult::Failed;
     };
 
-    if DemoFileName::parse(output_name).is_err() {
+    if !is_valid_demo_filename(output_name) {
         error(format!(
             "output demo filename is invalid or reserved: {output_name}"
         ));
@@ -840,7 +840,7 @@ pub fn split_ext(name: &str) -> (&str, &str) {
 
 /// Derives a clean `.dem` demo filename from an input archive path, stripping archive extensions and sanitizing.
 #[must_use]
-pub fn uncompressed_demo_name(input: &Path) -> DemoFileName {
+pub fn uncompressed_demo_name(input: &Path) -> String {
     let file_name = input
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -859,10 +859,7 @@ pub fn uncompressed_demo_name(input: &Path) -> DemoFileName {
         format!("{name}.dem")
     };
 
-    match DemoFileName::parse(&candidate) {
-        Ok(valid) => valid,
-        Err(_) => DemoFileName::sanitize(&candidate),
-    }
+    sanitize_demo_filename(&candidate)
 }
 
 fn name_with_suffix(stem: &str, suffix: &str, ext: &str) -> String {
@@ -1033,62 +1030,35 @@ pub fn run_extract_batch_outcome(
             };
         }
 
-        let out_name = if !config.rename_demo {
-            let natural = uncompressed_demo_name(input);
-            if total == 1 {
-                println!("{}", output::field("Input", input.display()));
-                if config.overwrite_single_file_extraction || !csgo.join(&natural).exists() {
-                    natural
-                } else {
-                    let (stem, ext) = split_ext(natural.as_str());
-                    let candidate = next_free_name(csgo, stem, ext, &config.delimiter);
-                    match DemoFileName::parse(&candidate) {
-                        Ok(valid) => valid,
-                        Err(_) => DemoFileName::sanitize(&candidate),
-                    }
-                }
-            } else {
-                println!(
-                    "{}",
-                    output::title(format!("[{}/{}] {}", index + 1, total, input.display()))
-                );
-                if !csgo.join(&natural).exists() {
-                    natural
-                } else {
-                    let (stem, ext) = split_ext(natural.as_str());
-                    let candidate = next_free_name(csgo, stem, ext, &config.delimiter);
-                    match DemoFileName::parse(&candidate) {
-                        Ok(valid) => valid,
-                        Err(_) => DemoFileName::sanitize(&candidate),
-                    }
-                }
-            }
-        } else if total == 1 {
+        if total == 1 {
             println!("{}", output::field("Input", input.display()));
-            if config.overwrite_single_file_extraction || !csgo.join(target).exists() {
-                match DemoFileName::parse(target) {
-                    Ok(valid) => valid,
-                    Err(_) => DemoFileName::sanitize(target),
-                }
-            } else {
-                let candidate = next_free_name(csgo, stem, ext, &config.delimiter);
-                match DemoFileName::parse(&candidate) {
-                    Ok(valid) => valid,
-                    Err(_) => DemoFileName::sanitize(&candidate),
-                }
-            }
         } else {
             println!(
                 "{}",
                 output::title(format!("[{}/{}] {}", index + 1, total, input.display()))
             );
-            let candidate = next_free_name(csgo, stem, ext, &config.delimiter);
-            match DemoFileName::parse(&candidate) {
-                Ok(valid) => valid,
-                Err(_) => DemoFileName::sanitize(&candidate),
+        }
+
+        let out_name = if !config.rename_demo {
+            let natural = uncompressed_demo_name(input);
+            if (total == 1 && config.overwrite_single_file_extraction)
+                || !csgo.join(&natural).exists()
+            {
+                natural
+            } else {
+                let (stem, ext) = split_ext(&natural);
+                next_free_name(csgo, stem, ext, &config.delimiter)
             }
+        } else if total == 1 {
+            if config.overwrite_single_file_extraction || !csgo.join(target).exists() {
+                target.clone()
+            } else {
+                next_free_name(csgo, stem, ext, &config.delimiter)
+            }
+        } else {
+            next_free_name(csgo, stem, ext, &config.delimiter)
         };
-        let output_path = csgo.join(out_name.as_str());
+        let output_path = csgo.join(&out_name);
 
         match extract_one_with_buffer(
             input,
@@ -1097,7 +1067,7 @@ pub fn run_extract_batch_outcome(
             move_to_recycle_bin,
             &mut buffer,
         ) {
-            ExtractResult::Ok => extracted.push(out_name.into_inner()),
+            ExtractResult::Ok => extracted.push(out_name),
             ExtractResult::Failed => failed.push(input),
             ExtractResult::Cancelled => {
                 output::cancelled();

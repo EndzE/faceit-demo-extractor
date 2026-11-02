@@ -1,10 +1,4 @@
-//! Filename validation, Windows DOS device reserved name checking, and safe demo naming types.
-
-use std::fmt;
-use std::path::Path;
-use std::str::FromStr;
-
-use unicode_general_category::{GeneralCategory, get_general_category};
+//! Filename validation, Windows DOS device reserved name checking, and safe demo naming functions.
 
 use crate::MAX_FILENAME_LEN;
 
@@ -22,6 +16,27 @@ fn is_reserved_name(name: &str) -> bool {
     WINDOWS_RESERVED_NAMES
         .iter()
         .any(|&reserved| reserved.eq_ignore_ascii_case(name))
+}
+
+#[inline]
+fn is_control_or_format(ch: char) -> bool {
+    let code = ch as u32;
+    code < 32
+        || code == 127
+        || matches!(
+            ch,
+            '\u{00AD}'
+                | '\u{0600}'..='\u{0605}'
+                | '\u{061C}'
+                | '\u{06DD}'
+                | '\u{070F}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+        )
 }
 
 /// Returns the length of `value` when encoded as UTF-16 code units.
@@ -57,14 +72,8 @@ pub fn is_valid_filename(name: &str) -> bool {
     if name.starts_with(' ') || name.ends_with('.') || name.ends_with(' ') {
         return false;
     }
-    for ch in name.chars() {
-        let code = ch as u32;
-        if code < 32 || code == 127 {
-            return false;
-        }
-        if get_general_category(ch) == GeneralCategory::Format {
-            return false;
-        }
+    if name.chars().any(is_control_or_format) {
+        return false;
     }
 
     let stem = name.split('.').next().unwrap_or("").trim();
@@ -90,223 +99,91 @@ pub fn is_valid_delimiter(delim: &str) -> bool {
     if delim.chars().any(|ch| INVALID_FILENAME_CHARS.contains(&ch)) {
         return false;
     }
-    for ch in delim.chars() {
-        let code = ch as u32;
-        if code < 32 || code == 127 {
-            return false;
-        }
-        if get_general_category(ch) == GeneralCategory::Format {
-            return false;
-        }
+    if delim.chars().any(is_control_or_format) {
+        return false;
     }
     true
 }
 
-/// An error indicating that a string could not be parsed as a valid [`.dem` filename](DemoFileName).
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum DemoFileNameError {
-    /// The string violates Windows filename conventions or lacks a `.dem` extension.
-    #[error("invalid demo filename: {0}")]
-    Invalid(String),
-}
-
-/// A validated `.dem` filename that is guaranteed to be safe across all Windows filesystems.
+/// Sanitizes an arbitrary string into a guaranteed valid demo filename ending in `.dem`.
 ///
-/// Cannot be constructed directly with arbitrary strings; must be parsed via [`DemoFileName::parse`]
-/// or sanitized via [`DemoFileName::sanitize`]. Guards against reserved Windows DOS device names
-/// (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`, `CLOCK$`, etc.), illegal characters (`:`, `<`, `>`,
-/// `"`, `/`, `\`, `|`, `?`, `*`), control characters, formatting characters, and leading/trailing dots or spaces.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DemoFileName(String);
+/// Strips directory paths, replaces illegal or reserved Windows characters with underscores,
+/// prefixes reserved DOS device names with an underscore (e.g. `CON.dem` becomes `_CON.dem`),
+/// ensures a `.dem` extension, and enforces length bounds.
+#[must_use]
+pub fn sanitize_demo_filename(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if is_valid_demo_filename(trimmed) {
+        return trimmed.to_string();
+    }
 
-impl DemoFileName {
-    /// Parses and validates a raw filename string.
-    ///
-    /// Trims leading and trailing whitespace. Returns an error if the filename is invalid or reserved.
-    pub fn parse(raw: &str) -> Result<Self, DemoFileNameError> {
-        let trimmed = raw.trim();
-        if is_valid_demo_filename(trimmed) {
-            Ok(Self(trimmed.to_string()))
+    // Split directory separators if any leaked in (take the basename)
+    let base_start = trimmed.rfind(['\\', '/']).map(|idx| idx + 1).unwrap_or(0);
+    let base = &trimmed[base_start..];
+
+    // Determine stem and whether extension is .dem
+    let (stem, ext) = if let Some(dot) = base.rfind('.') {
+        let ext = &base[dot..];
+        if ext.eq_ignore_ascii_case(".dem") {
+            (base[..dot].to_string(), ext)
         } else {
-            Err(DemoFileNameError::Invalid(raw.to_string()))
+            (base.to_string(), ".dem")
+        }
+    } else {
+        (base.to_string(), ".dem")
+    };
+
+    // Replace invalid characters in stem
+    let mut clean_stem = String::with_capacity(stem.len());
+    for ch in stem.chars() {
+        if INVALID_FILENAME_CHARS.contains(&ch)
+            || ch == '/'
+            || ch == '\\'
+            || is_control_or_format(ch)
+        {
+            clean_stem.push('_');
+        } else {
+            clean_stem.push(ch);
         }
     }
 
-    /// Sanitizes an arbitrary string into a guaranteed valid [`DemoFileName`].
-    ///
-    /// Strips directory paths, replaces illegal or reserved Windows characters with underscores,
-    /// prefixes reserved DOS device names with an underscore (e.g. `CON.dem` becomes `_CON.dem`),
-    /// ensures a `.dem` extension, and enforces length bounds.
-    #[must_use]
-    pub fn sanitize(raw: &str) -> Self {
-        let trimmed = raw.trim();
-        if is_valid_demo_filename(trimmed) {
-            return Self(trimmed.to_string());
-        }
+    // Trim leading spaces, trailing spaces, and trailing dots
+    let mut stem = clean_stem.trim().trim_end_matches('.').trim().to_string();
 
-        // Split directory separators if any leaked in (take the basename)
-        let base_start = trimmed.rfind(['\\', '/']).map(|idx| idx + 1).unwrap_or(0);
-        let base = &trimmed[base_start..];
+    if stem.is_empty() {
+        stem = "demo".to_string();
+    }
 
-        // Determine stem and whether extension is .dem
-        let (stem, ext) = if let Some(dot) = base.rfind('.') {
-            let ext = &base[dot..];
-            if ext.eq_ignore_ascii_case(".dem") {
-                (base[..dot].to_string(), ext)
-            } else {
-                (base.to_string(), ".dem")
-            }
-        } else {
-            (base.to_string(), ".dem")
-        };
+    // Check for Windows reserved names in the primary stem
+    let first_part = stem.split('.').next().unwrap_or("").trim();
+    if is_reserved_name(first_part) {
+        stem = format!("_{stem}");
+    }
 
-        // Replace invalid characters in stem
-        let mut clean_stem = String::with_capacity(stem.len());
-        for ch in stem.chars() {
-            let code = ch as u32;
-            if INVALID_FILENAME_CHARS.contains(&ch)
-                || ch == '/'
-                || ch == '\\'
-                || code < 32
-                || code == 127
-                || get_general_category(ch) == GeneralCategory::Format
-            {
-                clean_stem.push('_');
-            } else {
-                clean_stem.push(ch);
-            }
-        }
+    // Enforce MAX_FILENAME_LEN (255 utf16 units) including ext (".dem" = 4)
+    let max_stem_len = MAX_FILENAME_LEN.saturating_sub(utf16_len(ext));
+    while utf16_len(&stem) > max_stem_len {
+        stem.pop();
+    }
+    stem = stem.trim().trim_end_matches('.').trim().to_string();
+    if stem.is_empty() {
+        stem = "demo".to_string();
+    }
 
-        // Trim leading spaces, trailing spaces, and trailing dots
-        let mut stem = clean_stem.trim().trim_end_matches('.').trim().to_string();
-
-        if stem.is_empty() {
-            stem = "demo".to_string();
-        }
-
-        // Check for Windows reserved names in the primary stem
-        let first_part = stem.split('.').next().unwrap_or("").trim();
-        if is_reserved_name(first_part) {
-            stem = format!("_{stem}");
-        }
-
-        // Enforce MAX_FILENAME_LEN (255 utf16 units) including ext (".dem" = 4)
-        let max_stem_len = MAX_FILENAME_LEN.saturating_sub(utf16_len(ext));
+    // Re-check reserved names in case truncation exposed one
+    let first_part = stem.split('.').next().unwrap_or("").trim();
+    if is_reserved_name(first_part) {
+        stem = format!("_{stem}");
         while utf16_len(&stem) > max_stem_len {
             stem.pop();
         }
-        stem = stem.trim().trim_end_matches('.').trim().to_string();
-        if stem.is_empty() {
-            stem = "demo".to_string();
-        }
-
-        // Re-check reserved names in case truncation exposed one
-        let first_part = stem.split('.').next().unwrap_or("").trim();
-        if is_reserved_name(first_part) {
-            stem = format!("_{stem}");
-            while utf16_len(&stem) > max_stem_len {
-                stem.pop();
-            }
-        }
-
-        let candidate = format!("{stem}{ext}");
-        if is_valid_demo_filename(&candidate) {
-            Self(candidate)
-        } else {
-            Self("demo.dem".to_string())
-        }
     }
 
-    /// Returns a string slice of the underlying validated filename.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Consumes the wrapper, returning the owned [`String`].
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl fmt::Display for DemoFileName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl AsRef<str> for DemoFileName {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AsRef<Path> for DemoFileName {
-    fn as_ref(&self) -> &Path {
-        Path::new(&self.0)
-    }
-}
-
-impl std::ops::Deref for DemoFileName {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl PartialEq<str> for DemoFileName {
-    fn eq(&self, other: &str) -> bool {
-        self.0 == other
-    }
-}
-
-impl PartialEq<&str> for DemoFileName {
-    fn eq(&self, other: &&str) -> bool {
-        self.0 == *other
-    }
-}
-
-impl PartialEq<DemoFileName> for &str {
-    fn eq(&self, other: &DemoFileName) -> bool {
-        *self == other.0
-    }
-}
-
-impl PartialEq<String> for DemoFileName {
-    fn eq(&self, other: &String) -> bool {
-        &self.0 == other
-    }
-}
-
-impl PartialEq<DemoFileName> for String {
-    fn eq(&self, other: &DemoFileName) -> bool {
-        self == &other.0
-    }
-}
-
-impl FromStr for DemoFileName {
-    type Err = DemoFileNameError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s)
-    }
-}
-
-impl TryFrom<&str> for DemoFileName {
-    type Error = DemoFileNameError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::parse(value)
-    }
-}
-
-impl TryFrom<String> for DemoFileName {
-    type Error = DemoFileNameError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(&value)
+    let candidate = format!("{stem}{ext}");
+    if is_valid_demo_filename(&candidate) {
+        candidate
+    } else {
+        "demo.dem".to_string()
     }
 }
 

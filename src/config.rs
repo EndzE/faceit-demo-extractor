@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::output::{self, warn};
-use crate::validate::{DemoFileName, is_valid_delimiter};
+use crate::validate::{is_valid_delimiter, is_valid_demo_filename};
 use crate::{
     DEFAULT_DELIMITER, DEFAULT_KEEP_ZST, DEFAULT_MOVE_TO_RECYCLE_BIN,
     DEFAULT_NOTIFICATIONS_INSTEAD_OF_CONSOLE, DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
@@ -69,9 +69,14 @@ where
 {
     let opt = Option::<Value>::deserialize(deserializer)?;
     let valid = match opt {
-        Some(Value::String(name)) => DemoFileName::parse(&name)
-            .map(DemoFileName::into_inner)
-            .ok(),
+        Some(Value::String(name)) => {
+            let trimmed = name.trim();
+            if is_valid_demo_filename(trimmed) {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        }
         _ => None,
     };
     Ok(valid.unwrap_or_else(|| DEFAULT_TARGET_FILENAME.to_string()))

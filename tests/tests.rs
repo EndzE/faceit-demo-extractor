@@ -17,7 +17,7 @@ use faceit_demo_extractor::extract::{self, ExtractResult};
 use faceit_demo_extractor::queue;
 use faceit_demo_extractor::registry;
 use faceit_demo_extractor::validate::{
-    DemoFileName, DemoFileNameError, is_valid_demo_filename, is_valid_filename, utf16_len,
+    is_valid_demo_filename, is_valid_filename, sanitize_demo_filename, utf16_len,
 };
 use faceit_demo_extractor::{DEMO_MAGIC, HOME_ENV, MAX_FILENAME_LEN, Paths};
 
@@ -131,87 +131,60 @@ fn demo_filename_validation_requires_dem_extension() {
 }
 
 #[test]
-fn demo_file_name_parse_and_traits() {
-    use std::str::FromStr;
-
+fn demo_file_name_validation() {
     // Valid inputs
-    let dfn = DemoFileName::parse("1.dem").unwrap();
-    assert_eq!(dfn.as_str(), "1.dem");
-    assert_eq!(dfn, "1.dem");
-    assert_eq!("1.dem", dfn);
-    assert_eq!(dfn, String::from("1.dem"));
-    assert_eq!(String::from("1.dem"), dfn);
-    assert_eq!(format!("{dfn}"), "1.dem");
-    let path_ref: &Path = dfn.as_ref();
-    assert_eq!(path_ref, Path::new("1.dem"));
-    let str_ref: &str = dfn.as_ref();
-    assert_eq!(str_ref, "1.dem");
-    assert_eq!(DemoFileName::from_str("1.dem").unwrap(), "1.dem");
-    assert_eq!(DemoFileName::try_from("1.dem").unwrap(), "1.dem");
-    assert_eq!(
-        DemoFileName::try_from(String::from("1.dem")).unwrap(),
-        "1.dem"
-    );
-
-    // Whitespace trimming during parse
-    assert_eq!(DemoFileName::parse("  match.dem  ").unwrap(), "match.dem");
+    assert!(is_valid_demo_filename("1.dem"));
+    assert!(is_valid_demo_filename("match.dem"));
 
     // Invalid extensions
-    assert_eq!(
-        DemoFileName::parse("1.txt"),
-        Err(DemoFileNameError::Invalid("1.txt".to_string()))
-    );
-    assert_eq!(
-        DemoFileName::parse("1.txt").unwrap_err().to_string(),
-        "invalid demo filename: 1.txt"
-    );
-    assert!(DemoFileName::parse("match").is_err());
+    assert!(!is_valid_demo_filename("1.txt"));
+    assert!(!is_valid_demo_filename("match"));
 
     // Reserved Windows names
-    assert!(DemoFileName::parse("con.dem").is_err());
-    assert!(DemoFileName::parse("CON.DEM").is_err());
-    assert!(DemoFileName::parse("prn.dem").is_err());
-    assert!(DemoFileName::parse("aux.dem").is_err());
-    assert!(DemoFileName::parse("nul.dem").is_err());
-    assert!(DemoFileName::parse("com1.dem").is_err());
-    assert!(DemoFileName::parse("lpt1.dem").is_err());
-    assert!(DemoFileName::parse("clock$.dem").is_err());
+    assert!(!is_valid_demo_filename("con.dem"));
+    assert!(!is_valid_demo_filename("CON.DEM"));
+    assert!(!is_valid_demo_filename("prn.dem"));
+    assert!(!is_valid_demo_filename("aux.dem"));
+    assert!(!is_valid_demo_filename("nul.dem"));
+    assert!(!is_valid_demo_filename("com1.dem"));
+    assert!(!is_valid_demo_filename("lpt1.dem"));
+    assert!(!is_valid_demo_filename("clock$.dem"));
 
     // Alternate Data Streams / invalid characters
-    assert!(DemoFileName::parse("match.dem:stream.dem").is_err());
-    assert!(DemoFileName::parse("bad<name>.dem").is_err());
-    assert!(DemoFileName::parse("bad|name.dem").is_err());
-    assert!(DemoFileName::parse("bad?name.dem").is_err());
-    assert!(DemoFileName::parse("bad*name.dem").is_err());
+    assert!(!is_valid_demo_filename("match.dem:stream.dem"));
+    assert!(!is_valid_demo_filename("bad<name>.dem"));
+    assert!(!is_valid_demo_filename("bad|name.dem"));
+    assert!(!is_valid_demo_filename("bad?name.dem"));
+    assert!(!is_valid_demo_filename("bad*name.dem"));
 }
 
 #[test]
 fn demo_file_name_sanitization() {
     // Reserved names
-    assert_eq!(DemoFileName::sanitize("con.dem"), "_con.dem");
-    assert_eq!(DemoFileName::sanitize("CON.DEM"), "_CON.DEM");
-    assert_eq!(DemoFileName::sanitize("nul.dem"), "_nul.dem");
-    assert_eq!(DemoFileName::sanitize("aux.dem"), "_aux.dem");
-    assert_eq!(DemoFileName::sanitize("com1.dem"), "_com1.dem");
-    assert_eq!(DemoFileName::sanitize("clock$.dem"), "_clock$.dem");
+    assert_eq!(sanitize_demo_filename("con.dem"), "_con.dem");
+    assert_eq!(sanitize_demo_filename("CON.DEM"), "_CON.DEM");
+    assert_eq!(sanitize_demo_filename("nul.dem"), "_nul.dem");
+    assert_eq!(sanitize_demo_filename("aux.dem"), "_aux.dem");
+    assert_eq!(sanitize_demo_filename("com1.dem"), "_com1.dem");
+    assert_eq!(sanitize_demo_filename("clock$.dem"), "_clock$.dem");
 
     // Colons and illegal characters
     assert_eq!(
-        DemoFileName::sanitize("match.dem:stream.dem"),
+        sanitize_demo_filename("match.dem:stream.dem"),
         "match.dem_stream.dem"
     );
-    assert_eq!(DemoFileName::sanitize("bad<name>?.dem"), "bad_name__.dem");
+    assert_eq!(sanitize_demo_filename("bad<name>?.dem"), "bad_name__.dem");
 
     // Empty and whitespace
-    assert_eq!(DemoFileName::sanitize(""), "demo.dem");
-    assert_eq!(DemoFileName::sanitize("   "), "demo.dem");
-    assert_eq!(DemoFileName::sanitize(":::"), "___.dem");
+    assert_eq!(sanitize_demo_filename(""), "demo.dem");
+    assert_eq!(sanitize_demo_filename("   "), "demo.dem");
+    assert_eq!(sanitize_demo_filename(":::"), "___.dem");
 
     // Non-.dem extension gets .dem appended
-    assert_eq!(DemoFileName::sanitize("match.txt"), "match.txt.dem");
+    assert_eq!(sanitize_demo_filename("match.txt"), "match.txt.dem");
 
     // Already valid names remain untouched
-    assert_eq!(DemoFileName::sanitize("match-12345.dem"), "match-12345.dem");
+    assert_eq!(sanitize_demo_filename("match-12345.dem"), "match-12345.dem");
 }
 
 #[test]

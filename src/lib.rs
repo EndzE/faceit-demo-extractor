@@ -38,7 +38,7 @@ pub mod win32;
 pub use crate::extract::DeleteOriginalError;
 pub use crate::queue::{ContextMenuError, QueueError};
 pub use crate::registry::RegistryError;
-pub use crate::validate::{DemoFileName, DemoFileNameError};
+pub use crate::validate::{is_valid_demo_filename, sanitize_demo_filename};
 pub use crate::win32::Win32Error;
 
 use std::path::{Path, PathBuf};
