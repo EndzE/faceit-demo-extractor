@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::config::{self, Config};
 use crate::cs2;
 use crate::output::{self, error, warn};
-use crate::validate::{is_valid_demo_filename, sanitize_demo_filename, utf16_len};
+use crate::validate::{is_valid_demo_filename, sanitize_demo_filename, truncate_utf16, utf16_len};
 use crate::win32;
 use crate::{CANCEL, CleanupGuard, DEMO_MAGIC, MAX_FILENAME_LEN, Paths};
 
@@ -785,19 +785,7 @@ pub fn uncompressed_demo_name(input: &Path) -> String {
 
 fn name_with_suffix(stem: &str, suffix: &str, ext: &str) -> String {
     let max_stem_utf16 = MAX_FILENAME_LEN.saturating_sub(utf16_len(suffix) + utf16_len(ext));
-    let mut accumulated_utf16 = 0;
-    let mut truncate_byte_idx = stem.len();
-
-    for (idx, ch) in stem.char_indices() {
-        let ch_utf16_len = ch.len_utf16();
-        if accumulated_utf16 + ch_utf16_len > max_stem_utf16 {
-            truncate_byte_idx = idx;
-            break;
-        }
-        accumulated_utf16 += ch_utf16_len;
-    }
-
-    let stem = &stem[..truncate_byte_idx];
+    let stem = truncate_utf16(stem, max_stem_utf16);
     format!("{stem}{suffix}{ext}")
 }
 

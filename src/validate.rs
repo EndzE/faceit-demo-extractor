@@ -45,6 +45,20 @@ pub fn utf16_len(value: &str) -> usize {
     value.encode_utf16().count()
 }
 
+/// Returns the longest prefix of `value` whose UTF-16 length does not exceed `max_units`.
+#[must_use]
+pub fn truncate_utf16(value: &str, max_units: usize) -> &str {
+    let mut units = 0;
+    for (idx, ch) in value.char_indices() {
+        let len = ch.len_utf16();
+        if units + len > max_units {
+            return &value[..idx];
+        }
+        units += len;
+    }
+    value
+}
+
 /// Checks whether `name` is a valid Windows filename ending in `.dem`.
 #[must_use]
 pub fn is_valid_demo_filename(name: &str) -> bool {
@@ -147,36 +161,22 @@ pub fn sanitize_demo_filename(raw: &str) -> String {
         }
     }
 
-    // Trim leading spaces, trailing spaces, and trailing dots
-    let mut stem = clean_stem.trim().trim_end_matches('.').trim().to_string();
-
-    if stem.is_empty() {
-        stem = "demo".to_string();
-    }
+    // Enforce MAX_FILENAME_LEN (255 utf16 units) including ext (".dem" = 4)
+    let max_stem_len = MAX_FILENAME_LEN.saturating_sub(utf16_len(ext));
+    let truncated =
+        truncate_utf16(clean_stem.trim_start(), max_stem_len).trim_end_matches(['.', ' ']);
+    let mut stem = if truncated.is_empty() {
+        "demo".to_string()
+    } else {
+        truncated.to_string()
+    };
 
     // Check for Windows reserved names in the primary stem
     let first_part = stem.split('.').next().unwrap_or("").trim();
     if is_reserved_name(first_part) {
-        stem = format!("_{stem}");
-    }
-
-    // Enforce MAX_FILENAME_LEN (255 utf16 units) including ext (".dem" = 4)
-    let max_stem_len = MAX_FILENAME_LEN.saturating_sub(utf16_len(ext));
-    while utf16_len(&stem) > max_stem_len {
-        stem.pop();
-    }
-    stem = stem.trim().trim_end_matches('.').trim().to_string();
-    if stem.is_empty() {
-        stem = "demo".to_string();
-    }
-
-    // Re-check reserved names in case truncation exposed one
-    let first_part = stem.split('.').next().unwrap_or("").trim();
-    if is_reserved_name(first_part) {
-        stem = format!("_{stem}");
-        while utf16_len(&stem) > max_stem_len {
-            stem.pop();
-        }
+        stem.insert(0, '_');
+        let re_truncated = truncate_utf16(&stem, max_stem_len).trim_end_matches(['.', ' ']);
+        stem = re_truncated.to_string();
     }
 
     let candidate = format!("{stem}{ext}");
@@ -212,5 +212,42 @@ mod tests {
         assert!(!is_reserved_name("con1"));
         assert!(!is_reserved_name("normal"));
         assert!(!is_reserved_name("com10"));
+    }
+
+    #[test]
+    fn test_truncate_utf16() {
+        assert_eq!(truncate_utf16("hello", 10), "hello");
+        assert_eq!(truncate_utf16("hello", 5), "hello");
+        assert_eq!(truncate_utf16("hello", 3), "hel");
+        assert_eq!(truncate_utf16("hello", 0), "");
+        assert_eq!(truncate_utf16("", 5), "");
+
+        // Multi-byte UTF-8, single UTF-16 code unit
+        assert_eq!(truncate_utf16("café", 4), "café");
+        assert_eq!(truncate_utf16("café", 3), "caf");
+
+        // Surrogate pair (🦀 len_utf16 = 2)
+        assert_eq!(truncate_utf16("a🦀b", 4), "a🦀b");
+        assert_eq!(truncate_utf16("a🦀b", 3), "a🦀");
+        assert_eq!(truncate_utf16("a🦀b", 2), "a");
+        assert_eq!(truncate_utf16("a🦀b", 1), "a");
+        assert_eq!(truncate_utf16("🦀", 1), "");
+        assert_eq!(truncate_utf16("🦀", 2), "🦀");
+    }
+
+    #[test]
+    fn test_sanitize_demo_filename_long_stems() {
+        let long_stem = "a".repeat(300);
+        let sanitized = sanitize_demo_filename(&format!("{long_stem}.dem"));
+        assert_eq!(utf16_len(&sanitized), MAX_FILENAME_LEN);
+        assert!(is_valid_demo_filename(&sanitized));
+        assert!(sanitized.ends_with(".dem"));
+
+        // Long stem starting with a reserved name
+        let con_long = format!("CON.{long_stem}.dem");
+        let sanitized_con = sanitize_demo_filename(&con_long);
+        assert!(sanitized_con.starts_with("_CON."));
+        assert!(utf16_len(&sanitized_con) <= MAX_FILENAME_LEN);
+        assert!(is_valid_demo_filename(&sanitized_con));
     }
 }

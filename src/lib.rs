@@ -37,7 +37,7 @@ pub mod win32;
 
 pub use crate::queue::ContextMenuError;
 pub use crate::registry::RegistryError;
-pub use crate::validate::{is_valid_demo_filename, sanitize_demo_filename};
+pub use crate::validate::{is_valid_demo_filename, sanitize_demo_filename, truncate_utf16};
 pub use crate::win32::Win32Error;
 
 use std::panic::{self, PanicHookInfo};
