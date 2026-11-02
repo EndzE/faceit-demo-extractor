@@ -11,28 +11,13 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::output;
-use crate::{CANCEL, Paths, WORKER_MODE, config, extract};
+use crate::{CANCEL, CleanupGuard, Paths, config, extract};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const IDLE_WINDOW: Duration = Duration::from_millis(700);
 const MAX_TOTAL: Duration = Duration::from_secs(60);
 const STARTUP_POLL: Duration = Duration::from_millis(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
-
-struct WorkerModeGuard;
-
-impl WorkerModeGuard {
-    fn new() -> Self {
-        WORKER_MODE.store(true, Ordering::Relaxed);
-        Self
-    }
-}
-
-impl Drop for WorkerModeGuard {
-    fn drop(&mut self) {
-        WORKER_MODE.store(false, Ordering::Relaxed);
-    }
-}
 
 /// Errors originating from Explorer context menu queue dispatch.
 #[derive(Debug, thiserror::Error)]
@@ -668,7 +653,7 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
 
 /// Main background queue worker loop, consuming pending job files until the queue remains idle.
 pub fn run_worker(paths: &Paths) -> i32 {
-    let worker_mode = WorkerModeGuard::new();
+    let cleanup_guard = CleanupGuard::new();
     let notifications = config::load_config(&paths.config).notifications_instead_of_console;
 
     if let Err(err) = ensure_queue_dir(paths) {
@@ -676,7 +661,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         if notifications {
             notify_worker_error(&format!("Could not prepare the extraction queue: {err}"));
         }
-        drop(worker_mode);
+        drop(cleanup_guard);
         pause_worker(notifications);
         return 1;
     }
@@ -689,7 +674,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
             if notifications {
                 notify_worker_error(&format!("Could not start the extraction worker: {err}"));
             }
-            drop(worker_mode);
+            drop(cleanup_guard);
             pause_worker(notifications);
             return 1;
         }
@@ -744,7 +729,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         println!("  {}", output::muted("No queued files were found."));
     }
 
-    drop(worker_mode);
+    drop(cleanup_guard);
     pause_worker(notifications);
 
     if any_failed { 1 } else { 0 }

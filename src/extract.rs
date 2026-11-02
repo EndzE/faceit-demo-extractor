@@ -12,7 +12,7 @@ use crate::cs2;
 use crate::output::{self, error, warn};
 use crate::validate::{is_valid_demo_filename, sanitize_demo_filename, utf16_len};
 use crate::win32;
-use crate::{CANCEL, DEMO_MAGIC, EXTRACTING, MAX_FILENAME_LEN, Paths};
+use crate::{CANCEL, CleanupGuard, DEMO_MAGIC, MAX_FILENAME_LEN, Paths};
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const BZIP2_MAGIC: &[u8; 3] = b"BZh";
@@ -94,21 +94,6 @@ impl From<io::Error> for HeaderError {
         } else {
             HeaderError::Read(err)
         }
-    }
-}
-
-struct ExtractingGuard;
-
-impl ExtractingGuard {
-    fn new() -> Self {
-        EXTRACTING.store(true, Ordering::Relaxed);
-        Self
-    }
-}
-
-impl Drop for ExtractingGuard {
-    fn drop(&mut self) {
-        EXTRACTING.store(false, Ordering::Relaxed);
     }
 }
 
@@ -732,7 +717,7 @@ pub fn test_archive(input: &Path) -> ExtractResult {
 
     println!("{}", output::field("Input", input.display()));
 
-    let _guard = ExtractingGuard::new();
+    let _guard = CleanupGuard::new();
     let mut head = Vec::with_capacity(DEMO_MAGIC.len());
     let mut sink = io::sink();
     let mut buffer = vec![0u8; COPY_BUFFER];
@@ -1016,7 +1001,7 @@ pub fn run_extract_batch_outcome(
     let mut extracted: Vec<String> = Vec::new();
     let mut failed: Vec<&Path> = Vec::new();
 
-    let _guard = ExtractingGuard::new();
+    let guard = CleanupGuard::new();
     let mut buffer = vec![0u8; COPY_BUFFER];
 
     for (index, input) in files.iter().enumerate() {
@@ -1082,6 +1067,8 @@ pub fn run_extract_batch_outcome(
 
         println!();
     }
+
+    drop(guard);
 
     let plural = if total == 1 { "" } else { "s" };
     let result = format!(

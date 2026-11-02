@@ -70,12 +70,26 @@ pub const HOME_ENV: &str = "FACEIT_DEMO_EXTRACTOR_HOME";
 
 /// Flag set when an extraction cancellation (e.g. Ctrl+C) is requested.
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
-/// Flag indicating whether active decompression is in progress.
-pub static EXTRACTING: AtomicBool = AtomicBool::new(false);
-/// Flag indicating whether the current process is running as a background queue worker.
-pub static WORKER_MODE: AtomicBool = AtomicBool::new(false);
-/// Flag indicating whether the console UI is waiting on an interactive pause prompt.
-pub static PAUSING: AtomicBool = AtomicBool::new(false);
+/// Flag indicating whether active work (decompression or worker queue processing) requires graceful cleanup before exit.
+pub static CLEANUP_REQUIRED: AtomicBool = AtomicBool::new(false);
+
+/// RAII guard that manages the [`CLEANUP_REQUIRED`] coordination flag.
+#[derive(Debug)]
+pub(crate) struct CleanupGuard;
+
+impl CleanupGuard {
+    /// Sets [`CLEANUP_REQUIRED`] to `true`.
+    pub(crate) fn new() -> Self {
+        CLEANUP_REQUIRED.store(true, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        CLEANUP_REQUIRED.store(false, Ordering::Relaxed);
+    }
+}
 
 /// Standard application paths for binaries, configuration, and job queue directories.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -176,7 +190,7 @@ pub fn run_console() -> i32 {
             );
             output::error(&message);
 
-            let notifications = WORKER_MODE.load(Ordering::Relaxed)
+            let notifications = std::env::args_os().any(|arg| arg == "--queue-worker")
                 && config::load_config(&Paths::discover().config).notifications_instead_of_console;
             if notifications {
                 if let Err(err) = win32::notify("Extraction failed", &message) {
@@ -210,9 +224,7 @@ pub fn run_quiet() -> i32 {
 fn install_ctrlc_handler() {
     let installed = ctrlc::set_handler(|| {
         CANCEL.store(true, Ordering::Relaxed);
-        if !PAUSING.load(Ordering::Relaxed)
-            && (EXTRACTING.load(Ordering::Relaxed) || WORKER_MODE.load(Ordering::Relaxed))
-        {
+        if CLEANUP_REQUIRED.load(Ordering::Relaxed) {
             return;
         }
         output::cancelled();
@@ -239,6 +251,16 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cleanup_guard_lifecycle() {
+        assert!(!CLEANUP_REQUIRED.load(Ordering::Relaxed));
+        {
+            let _guard = CleanupGuard::new();
+            assert!(CLEANUP_REQUIRED.load(Ordering::Relaxed));
+        }
+        assert!(!CLEANUP_REQUIRED.load(Ordering::Relaxed));
+    }
 
     #[test]
     fn test_panic_message_str() {

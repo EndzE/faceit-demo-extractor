@@ -177,12 +177,10 @@ pub fn pause(message: &str) {
         return;
     }
 
-    crate::PAUSING.store(true, Ordering::Relaxed);
     print!("{}", message.dimmed());
     let _ = io::stdout().flush();
     let mut line = String::new();
     let _ = io::stdin().read_line(&mut line);
-    crate::PAUSING.store(false, Ordering::Relaxed);
 }
 
 /// Formats a byte size in megabytes with 1 decimal place (e.g. `12.3 MB`).
