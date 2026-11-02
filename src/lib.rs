@@ -73,15 +73,26 @@ pub static CANCEL: AtomicBool = AtomicBool::new(false);
 /// Flag indicating whether active work (decompression or worker queue processing) requires graceful cleanup before exit.
 pub static CLEANUP_REQUIRED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(test)]
+pub(crate) static TEST_CLEANUP_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// RAII guard that manages the [`CLEANUP_REQUIRED`] coordination flag.
 #[derive(Debug)]
-pub(crate) struct CleanupGuard;
+pub(crate) struct CleanupGuard {
+    #[cfg(test)]
+    _test_lock: Option<std::sync::MutexGuard<'static, ()>>,
+}
 
 impl CleanupGuard {
     /// Sets [`CLEANUP_REQUIRED`] to `true`.
     pub(crate) fn new() -> Self {
+        #[cfg(test)]
+        let test_lock = TEST_CLEANUP_MUTEX.lock().ok();
         CLEANUP_REQUIRED.store(true, Ordering::Relaxed);
-        Self
+        Self {
+            #[cfg(test)]
+            _test_lock: test_lock,
+        }
     }
 }
 
@@ -270,11 +281,15 @@ mod tests {
 
     #[test]
     fn test_cleanup_guard_lifecycle() {
+        let _test_lock = TEST_CLEANUP_MUTEX.lock().unwrap();
+        CLEANUP_REQUIRED.store(false, Ordering::Relaxed);
         assert!(!CLEANUP_REQUIRED.load(Ordering::Relaxed));
+        drop(_test_lock);
         {
             let _guard = CleanupGuard::new();
             assert!(CLEANUP_REQUIRED.load(Ordering::Relaxed));
         }
+        let _test_lock = TEST_CLEANUP_MUTEX.lock().unwrap();
         assert!(!CLEANUP_REQUIRED.load(Ordering::Relaxed));
     }
 
