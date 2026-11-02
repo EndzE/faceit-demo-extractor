@@ -389,11 +389,15 @@ pub fn try_acquire_spawn_lock(paths: &Paths) -> io::Result<Option<File>> {
 ///
 /// Returns an [`io::Error`] if checking the lock fails.
 pub fn is_worker_lock_free(paths: &Paths) -> io::Result<bool> {
-    let Some(file) = try_acquire_worker_lock(paths)? else {
-        return Ok(false);
-    };
-    file.unlock()?;
-    Ok(true)
+    let file = open_worker_lock(paths)?;
+    match file.try_lock_shared() {
+        Ok(()) => {
+            file.unlock()?;
+            Ok(true)
+        }
+        Err(TryLockError::WouldBlock) => Ok(false),
+        Err(TryLockError::Error(err)) => Err(err),
+    }
 }
 
 /// Records the current process ID into `worker.pid`.
@@ -651,8 +655,8 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
 
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
-        if !is_worker_lock_free(paths).unwrap_or(false)
-            || read_worker_pid(paths).is_some()
+        if read_worker_pid(paths).is_some()
+            || !is_worker_lock_free(paths).unwrap_or(false)
             || !has_queued_files(paths)
         {
             break;
