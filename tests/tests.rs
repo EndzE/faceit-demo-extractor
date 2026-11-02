@@ -231,7 +231,9 @@ fn config_preserves_unknown_keys_and_bom() {
     let original = b"\xEF\xBB\xBF{\n  \"unknown\": 42,\n  \"target_filename\": \"demo.dem\"\n}\n";
     fs::write(&path, original).unwrap();
 
-    config::save_config(&path, &[("keep_zst", serde_json::Value::Bool(true))]).unwrap();
+    let mut config = config::load_config(&path);
+    config.keep_zst = true;
+    config::save_config(&path, &config).unwrap();
 
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["unknown"], serde_json::Value::from(42));
@@ -433,8 +435,14 @@ fn save_config_refuses_to_overwrite_invalid_json() {
     let path = directory.path().join("config.json");
     fs::write(&path, "not json").unwrap();
 
-    let error =
-        config::save_config(&path, &[("keep_zst", serde_json::Value::Bool(true))]).unwrap_err();
+    let error = config::save_config(
+        &path,
+        &Config {
+            keep_zst: true,
+            ..Config::defaults()
+        },
+    )
+    .unwrap_err();
     assert!(error.contains("not valid JSON"), "{error}");
     assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
     assert!(!directory.path().join("config.json.bak").exists());

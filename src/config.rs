@@ -20,98 +20,21 @@ use crate::{
 #[serde(default)]
 pub struct Config {
     /// Whether extracted demo files are renamed according to [`Config::target_filename`].
-    #[serde(deserialize_with = "de_bool_true")]
     pub rename_demo: bool,
     /// Destination filename when renaming extracted demos (e.g. `1.dem`).
-    #[serde(deserialize_with = "de_target_filename")]
     pub target_filename: String,
     /// Delimiter string used when suffixing filenames on conflict (e.g. `_`).
-    #[serde(deserialize_with = "de_delimiter")]
     pub delimiter: String,
     /// Whether original archive files (`.zst` or `.bz2`) are kept after extraction.
-    #[serde(deserialize_with = "de_bool_false")]
     pub keep_zst: bool,
     /// Whether deleted archives are sent to the Windows Recycle Bin instead of permanently deleted.
-    #[serde(deserialize_with = "de_bool_false")]
     pub move_to_recycle_bin: bool,
     /// Whether single-file extraction overwrites an existing destination file without suffixing.
-    #[serde(deserialize_with = "de_bool_true")]
     pub overwrite_single_file_extraction: bool,
     /// Whether background workers surface desktop toast notifications instead of console windows.
-    #[serde(deserialize_with = "de_bool_false")]
     pub notifications_instead_of_console: bool,
     /// Custom path override for the CS2 `csgo` folder.
-    #[serde(deserialize_with = "de_csgo_path")]
     pub csgo_path: Option<String>,
-}
-
-fn de_bool_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<Value>::deserialize(deserializer)?
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true))
-}
-
-fn de_bool_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<Value>::deserialize(deserializer)?
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false))
-}
-
-fn de_target_filename<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let opt = Option::<Value>::deserialize(deserializer)?;
-    let valid = match opt {
-        Some(Value::String(name)) => {
-            let trimmed = name.trim();
-            if is_valid_demo_filename(trimmed) {
-                Some(trimmed.to_string())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-    Ok(valid.unwrap_or_else(|| DEFAULT_TARGET_FILENAME.to_string()))
-}
-
-fn de_delimiter<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let opt = Option::<Value>::deserialize(deserializer)?;
-    let valid = match opt {
-        Some(Value::String(delim)) => {
-            let trimmed = delim.trim();
-            if is_valid_delimiter(trimmed) {
-                Some(trimmed.to_string())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-    Ok(valid.unwrap_or_else(|| DEFAULT_DELIMITER.to_string()))
-}
-
-fn de_csgo_path<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let opt = Option::<Value>::deserialize(deserializer)?;
-    Ok(match opt {
-        Some(Value::String(path)) if !path.trim().is_empty() => {
-            Some(path.trim().trim_matches('"').to_string())
-        }
-        _ => None,
-    })
 }
 
 impl Default for Config {
@@ -135,6 +58,83 @@ impl Config {
             csgo_path: None,
         }
     }
+
+    /// Sanitizes and validates configuration fields, falling back to defaults for invalid values.
+    #[must_use]
+    pub fn sanitize(mut self) -> Self {
+        let name = self.target_filename.trim();
+        self.target_filename = if is_valid_demo_filename(name) {
+            name.to_string()
+        } else {
+            DEFAULT_TARGET_FILENAME.to_string()
+        };
+
+        let delim = self.delimiter.trim();
+        self.delimiter = if is_valid_delimiter(delim) {
+            delim.to_string()
+        } else {
+            DEFAULT_DELIMITER.to_string()
+        };
+
+        self.csgo_path = self
+            .csgo_path
+            .as_deref()
+            .map(|p| p.trim().trim_matches('"').trim())
+            .filter(|p| !p.is_empty())
+            .map(str::to_string);
+
+        self
+    }
+}
+
+fn sanitize_map(data: &mut Map<String, Value>) {
+    let check_bool = |key: &str, default: bool, map: &mut Map<String, Value>| {
+        if let Some(val) = map.get(key)
+            && !val.is_boolean()
+        {
+            warn(format!(
+                "config.json: invalid value for \"{key}\" (expected boolean, found {val}); using default {default}"
+            ));
+            map.insert(key.to_string(), Value::Bool(default));
+        }
+    };
+
+    let check_string = |key: &str, default: &str, map: &mut Map<String, Value>| {
+        if let Some(val) = map.get(key)
+            && !val.is_string()
+        {
+            warn(format!(
+                "config.json: invalid value for \"{key}\" (expected string, found {val}); using default \"{default}\""
+            ));
+            map.insert(key.to_string(), Value::String(default.to_string()));
+        }
+    };
+
+    check_bool("rename_demo", DEFAULT_RENAME_DEMO, data);
+    check_string("target_filename", DEFAULT_TARGET_FILENAME, data);
+    check_string("delimiter", DEFAULT_DELIMITER, data);
+    check_bool("keep_zst", DEFAULT_KEEP_ZST, data);
+    check_bool("move_to_recycle_bin", DEFAULT_MOVE_TO_RECYCLE_BIN, data);
+    check_bool(
+        "overwrite_single_file_extraction",
+        DEFAULT_OVERWRITE_SINGLE_FILE_EXTRACTION,
+        data,
+    );
+    check_bool(
+        "notifications_instead_of_console",
+        DEFAULT_NOTIFICATIONS_INSTEAD_OF_CONSOLE,
+        data,
+    );
+
+    if let Some(val) = data.get("csgo_path")
+        && !val.is_string()
+        && !val.is_null()
+    {
+        warn(format!(
+            "config.json: invalid value for \"csgo_path\" (expected string or null, found {val}); ignoring"
+        ));
+        data.insert("csgo_path".to_string(), Value::Null);
+    }
 }
 
 fn strip_bom(bytes: &[u8]) -> &[u8] {
@@ -155,7 +155,13 @@ pub fn load_config(path: &Path) -> Config {
     let Ok(bytes) = fs::read(path) else {
         return Config::defaults();
     };
-    serde_json::from_slice::<Config>(strip_bom(&bytes)).unwrap_or_default()
+    let Ok(mut map) = parse_config_json(&bytes) else {
+        return Config::defaults();
+    };
+    sanitize_map(&mut map);
+    serde_json::from_value::<Config>(Value::Object(map))
+        .map(Config::sanitize)
+        .unwrap_or_default()
 }
 
 fn preserve_invalid_config(path: &Path) -> Result<PathBuf, String> {
@@ -195,19 +201,19 @@ fn write_config_atomic(path: &Path, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Merges the provided `updates` into the configuration file at `path`, writing atomically via a temporary file.
+/// Saves `config` into the configuration file at `path`, merging with existing keys and writing atomically.
 ///
 /// # Errors
 ///
 /// Returns an error message if reading the existing config fails, serialization fails, or writing fails.
-pub fn save_config(path: &Path, updates: &[(&str, Value)]) -> Result<(), String> {
+pub fn save_config(path: &Path, config: &Config) -> Result<(), String> {
     let mut merged = match fs::read(path) {
         Ok(bytes) => parse_config_json(&bytes)?,
         Err(err) if err.kind() == io::ErrorKind::NotFound => Map::new(),
         Err(err) => return Err(format!("could not read config.json: {err}")),
     };
-    for (key, value) in updates {
-        merged.insert((*key).to_string(), value.clone());
+    if let Ok(Value::Object(updates)) = serde_json::to_value(config) {
+        merged.extend(updates);
     }
 
     write_config_atomic(path, &Value::Object(merged))

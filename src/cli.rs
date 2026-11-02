@@ -4,8 +4,6 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use serde_json::Value;
-
 use crate::queue::ContextMenuError;
 use crate::validate::is_valid_demo_filename;
 use crate::{Paths, config, cs2, extract, output, queue, registry, validate, win32};
@@ -442,17 +440,14 @@ fn menu_change_filename(paths: &Paths, config: &mut config::Config) {
         return;
     }
 
-    let updated = config::save_config(
-        &paths.config,
-        &[("target_filename", Value::String(new_name.clone()))],
-    );
+    let old_name = config.target_filename.clone();
+    config.target_filename = new_name.clone();
 
-    if let Err(message) = updated {
+    if let Err(message) = config::save_config(&paths.config, config) {
+        config.target_filename = old_name;
         output::error(message);
         return;
     }
-
-    config.target_filename = new_name.clone();
 
     println!(
         "  {} New demos will be written as {}.",
@@ -476,12 +471,11 @@ fn menu_change_filename(paths: &Paths, config: &mut config::Config) {
 }
 
 fn menu_toggle_keep_zst(paths: &Paths, config: &mut config::Config) {
-    let keep = !config.keep_zst;
+    config.keep_zst = !config.keep_zst;
 
-    match config::save_config(&paths.config, &[("keep_zst", Value::Bool(keep))]) {
+    match config::save_config(&paths.config, config) {
         Ok(()) => {
-            config.keep_zst = keep;
-            if keep {
+            if config.keep_zst {
                 println!("  {} Original archives will be kept.", output::good("On."));
             } else {
                 println!(
@@ -490,20 +484,19 @@ fn menu_toggle_keep_zst(paths: &Paths, config: &mut config::Config) {
                 );
             }
         }
-        Err(message) => output::error(message),
+        Err(message) => {
+            config.keep_zst = !config.keep_zst;
+            output::error(message);
+        }
     }
 }
 
 fn menu_toggle_recycle_bin(paths: &Paths, config: &mut config::Config) {
-    let recycle = !config.move_to_recycle_bin;
+    config.move_to_recycle_bin = !config.move_to_recycle_bin;
 
-    match config::save_config(
-        &paths.config,
-        &[("move_to_recycle_bin", Value::Bool(recycle))],
-    ) {
+    match config::save_config(&paths.config, config) {
         Ok(()) => {
-            config.move_to_recycle_bin = recycle;
-            if recycle {
+            if config.move_to_recycle_bin {
                 println!(
                     "  {} Removed archives will be moved to the Recycle Bin.",
                     output::good("On.")
@@ -515,17 +508,19 @@ fn menu_toggle_recycle_bin(paths: &Paths, config: &mut config::Config) {
                 );
             }
         }
-        Err(message) => output::error(message),
+        Err(message) => {
+            config.move_to_recycle_bin = !config.move_to_recycle_bin;
+            output::error(message);
+        }
     }
 }
 
 fn menu_toggle_rename_demo(paths: &Paths, config: &mut config::Config) {
-    let rename = !config.rename_demo;
+    config.rename_demo = !config.rename_demo;
 
-    match config::save_config(&paths.config, &[("rename_demo", Value::Bool(rename))]) {
+    match config::save_config(&paths.config, config) {
         Ok(()) => {
-            config.rename_demo = rename;
-            if rename {
+            if config.rename_demo {
                 println!(
                     "  {} Demos will be renamed during extraction.",
                     output::good("On.")
@@ -552,23 +547,19 @@ fn menu_toggle_rename_demo(paths: &Paths, config: &mut config::Config) {
                 }
             }
         }
-        Err(message) => output::error(message),
+        Err(message) => {
+            config.rename_demo = !config.rename_demo;
+            output::error(message);
+        }
     }
 }
 
 fn menu_toggle_notifications(paths: &Paths, config: &mut config::Config) {
-    let notifications = !config.notifications_instead_of_console;
+    config.notifications_instead_of_console = !config.notifications_instead_of_console;
 
-    match config::save_config(
-        &paths.config,
-        &[(
-            "notifications_instead_of_console",
-            Value::Bool(notifications),
-        )],
-    ) {
+    match config::save_config(&paths.config, config) {
         Ok(()) => {
-            config.notifications_instead_of_console = notifications;
-            if notifications {
+            if config.notifications_instead_of_console {
                 println!(
                     "  {} Right-click extractions will run hidden and report with a notification.",
                     output::good("On.")
@@ -580,7 +571,10 @@ fn menu_toggle_notifications(paths: &Paths, config: &mut config::Config) {
                 );
             }
         }
-        Err(message) => output::error(message),
+        Err(message) => {
+            config.notifications_instead_of_console = !config.notifications_instead_of_console;
+            output::error(message);
+        }
     }
 }
 
@@ -618,19 +612,21 @@ fn menu_change_delimiter(paths: &Paths, config: &mut config::Config) {
         return;
     }
 
-    match config::save_config(
-        &paths.config,
-        &[("delimiter", Value::String(delimiter.to_string()))],
-    ) {
+    let old_delimiter = config.delimiter.clone();
+    config.delimiter = delimiter.to_string();
+
+    match config::save_config(&paths.config, config) {
         Ok(()) => {
-            config.delimiter = delimiter.to_string();
             println!(
                 "  {} Delimiter set to {}.",
                 output::good("Saved."),
                 output::strong(format!("\"{delimiter}\""))
             );
         }
-        Err(message) => output::error(message),
+        Err(message) => {
+            config.delimiter = old_delimiter;
+            output::error(message);
+        }
     }
 }
 
