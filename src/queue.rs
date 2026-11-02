@@ -17,9 +17,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const IDLE_WINDOW: Duration = Duration::from_millis(700);
 const MAX_TOTAL: Duration = Duration::from_secs(60);
 const STARTUP_POLL: Duration = Duration::from_millis(10);
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
-const WORKER_LOCK_RETRY: Duration = Duration::from_millis(500);
-const CANCEL_GRACE: Duration = Duration::from_millis(1000);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct WorkerModeGuard;
 
@@ -120,14 +118,8 @@ fn decode_queue_path(bytes: &[u8]) -> Option<PathBuf> {
         return (!path.as_os_str().is_empty()).then_some(path);
     }
 
-    let text = String::from_utf8_lossy(strip_utf8_bom(bytes))
-        .trim()
-        .to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(text))
-    }
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    (!text.is_empty()).then(|| PathBuf::from(text))
 }
 
 fn write_queue_entry(paths: &Paths, path: &Path) -> io::Result<()> {
@@ -230,10 +222,6 @@ fn is_path_file(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("path"))
 }
 
-fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
-    bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
-}
-
 /// Removes and returns currently pending job files from the queue directory in FIFO order.
 #[must_use]
 pub fn take_queue_files(paths: &Paths) -> Vec<PathBuf> {
@@ -298,14 +286,7 @@ pub fn has_queued_files(paths: &Paths) -> bool {
 }
 
 fn discard_queued_files(paths: &Paths) {
-    let deadline = Instant::now() + CANCEL_GRACE;
-    loop {
-        let _ = take_queue_files(paths);
-        if Instant::now() >= deadline {
-            break;
-        }
-        sleep(POLL_INTERVAL);
-    }
+    let _ = take_queue_files(paths);
 }
 
 /// Collects and consumes queued files using default idle debouncing timeouts.
@@ -396,19 +377,6 @@ pub fn try_acquire_worker_lock(paths: &Paths) -> io::Result<Option<File>> {
     }
 }
 
-fn acquire_worker_lock(paths: &Paths) -> io::Result<Option<File>> {
-    let file = open_worker_lock(paths)?;
-    let deadline = Instant::now() + WORKER_LOCK_RETRY;
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(Some(file)),
-            Err(TryLockError::WouldBlock) if Instant::now() < deadline => sleep(STARTUP_POLL),
-            Err(TryLockError::WouldBlock) => return Ok(None),
-            Err(TryLockError::Error(err)) => return Err(err),
-        }
-    }
-}
-
 /// Attempts to acquire the exclusive spawn lock without blocking.
 ///
 /// # Errors
@@ -436,29 +404,15 @@ pub fn is_worker_lock_free(paths: &Paths) -> io::Result<bool> {
     Ok(true)
 }
 
-/// Atomically writes the current process ID into `worker.pid`.
+/// Records the current process ID into `worker.pid`.
 pub fn write_worker_pid(paths: &Paths) {
-    if let Err(err) = write_worker_pid_atomically(paths) {
+    let result = ensure_queue_dir(paths)
+        .and_then(|()| fs::write(paths.worker_pid(), std::process::id().to_string()));
+    if let Err(err) = result {
         // INTENTIONAL: Writing worker PID is advisory for external status monitoring;
         // failure to write it must not abort the worker, but should be reported.
         output::warn(format!("failed to record worker PID: {err}"));
     }
-}
-
-fn write_worker_pid_atomically(paths: &Paths) -> io::Result<()> {
-    ensure_queue_dir(paths)?;
-
-    let mut temp = tempfile::Builder::new()
-        .prefix(".worker-pid-")
-        .suffix(".tmp")
-        .tempfile_in(&paths.queue_dir)?;
-
-    temp.write_all(std::process::id().to_string().as_bytes())?;
-    temp.flush()?;
-    temp.as_file().sync_all()?;
-    temp.persist(paths.worker_pid()).map_err(|err| err.error)?;
-
-    Ok(())
 }
 
 /// Reads the recorded worker process ID from `worker.pid` if it exists.
@@ -727,7 +681,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         return 1;
     }
 
-    let lock = match acquire_worker_lock(paths) {
+    let lock = match try_acquire_worker_lock(paths) {
         Ok(Some(lock)) => lock,
         Ok(None) => return 0,
         Err(err) => {
@@ -798,9 +752,6 @@ pub fn run_worker(paths: &Paths) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-    use std::thread;
-
     use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE};
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, OPEN_EXISTING,
@@ -866,28 +817,6 @@ mod tests {
             vec![PathBuf::from(r"C:\demo.zst")]
         );
         assert!(!entry_path.exists());
-    }
-
-    #[test]
-    fn worker_lock_acquisition_waits_out_a_probe() {
-        let directory = tempfile::tempdir().unwrap();
-        let paths = Paths::for_tests(directory.path());
-        let probe = try_acquire_worker_lock(&paths)
-            .unwrap()
-            .expect("probe lock");
-
-        let (started_tx, started_rx) = mpsc::channel();
-        let worker_paths = paths.clone();
-        let worker = thread::spawn(move || {
-            started_tx.send(()).unwrap();
-            acquire_worker_lock(&worker_paths).unwrap()
-        });
-
-        started_rx.recv().unwrap();
-        thread::sleep(Duration::from_millis(400));
-        drop(probe);
-
-        assert!(worker.join().unwrap().is_some());
     }
 
     #[test]
