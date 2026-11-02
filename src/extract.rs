@@ -270,23 +270,17 @@ fn read_available(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize
 }
 
 #[derive(Debug)]
-enum DetectError {
-    Open(io::Error),
-    Read(io::Error),
-}
-
-#[derive(Debug)]
 enum DetectedFormat {
     Zstd,
     Bzip2,
     Unrecognized { head: Vec<u8> },
 }
 
-fn detect_format(input: &Path) -> Result<DetectedFormat, DetectError> {
-    let file = File::open(input).map_err(DetectError::Open)?;
+fn detect_format(input: &Path) -> Result<DetectedFormat, HeaderError> {
+    let file = File::open(input).map_err(HeaderError::Open)?;
     let mut reader = BufReader::with_capacity(HEADER_BUFFER, file);
     let mut head = [0u8; 4];
-    let filled = read_available(&mut reader, &mut head).map_err(DetectError::Read)?;
+    let filled = read_available(&mut reader, &mut head).map_err(HeaderError::Read)?;
 
     if filled != head.len() {
         return Ok(DetectedFormat::Unrecognized {
@@ -345,12 +339,16 @@ fn check_header(input: &Path) -> Option<(ArchiveFormat, ArchiveHeader)> {
             report_unrecognized_format(&head);
             return None;
         }
-        Err(DetectError::Open(err)) => {
+        Err(HeaderError::Open(err)) => {
             error(format!("could not open the archive: {err}"));
             return None;
         }
-        Err(DetectError::Read(err)) => {
+        Err(HeaderError::Read(err)) => {
             error(format!("could not read the archive header: {err}"));
+            return None;
+        }
+        Err(HeaderError::Format(message)) => {
+            error(format!("could not read the archive header: {message}"));
             return None;
         }
     };
@@ -781,33 +779,21 @@ pub fn test_archive(input: &Path) -> ExtractResult {
     }
 }
 
-/// Error encountered when deleting an original archive file after extraction.
-#[derive(Debug, thiserror::Error)]
-pub enum DeleteOriginalError {
-    /// Moving the file to the Windows Recycle Bin failed.
-    #[error("failed to recycle file: {0}")]
-    Recycle(#[from] crate::win32::Win32Error),
-
-    /// Deleting the file directly from the filesystem failed.
-    #[error("failed to remove file: {0}")]
-    Io(#[from] io::Error),
-}
-
 /// Deletes the original archive at `path`, optionally sending it to the Windows Recycle Bin.
 ///
 /// # Errors
 ///
-/// Returns a [`DeleteOriginalError`] if recycling or direct removal fails.
-pub fn delete_original(path: &Path, use_recycle_bin: bool) -> Result<(), DeleteOriginalError> {
+/// Returns an [`io::Error`] if recycling or direct removal fails.
+pub fn delete_original(path: &Path, use_recycle_bin: bool) -> io::Result<()> {
     if use_recycle_bin {
-        win32::recycle_file(path)?;
+        win32::recycle_file(path).map_err(io::Error::other)?;
         return Ok(());
     }
 
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(DeleteOriginalError::Io(err)),
+        Err(err) => Err(err),
     }
 }
 
@@ -1468,8 +1454,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("missing.dem.zst");
         match detect_format(&missing) {
-            Err(DetectError::Open(_)) => {}
-            other => panic!("expected DetectError::Open, got {other:?}"),
+            Err(HeaderError::Open(_)) => {}
+            other => panic!("expected HeaderError::Open, got {other:?}"),
         }
     }
 

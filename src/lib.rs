@@ -35,8 +35,7 @@ pub mod registry;
 pub mod validate;
 pub mod win32;
 
-pub use crate::extract::DeleteOriginalError;
-pub use crate::queue::{ContextMenuError, QueueError};
+pub use crate::queue::ContextMenuError;
 pub use crate::registry::RegistryError;
 pub use crate::validate::{is_valid_demo_filename, sanitize_demo_filename};
 pub use crate::win32::Win32Error;

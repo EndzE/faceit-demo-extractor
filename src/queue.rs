@@ -30,22 +30,6 @@ pub enum ContextMenuError {
     Failure(String),
 }
 
-/// Errors originating from worker locking, process spawning, or queue directory preparation.
-#[derive(Debug, thiserror::Error)]
-pub enum QueueError {
-    /// Failure acquiring or unlocking an inter-process file lock.
-    #[error("could not open the worker lock: {0}")]
-    Lock(#[from] io::Error),
-
-    /// Worker executable could not be found next to the running process.
-    #[error("faceit-dem.exe was not found next to this executable.\nExpected: {}", .0.display())]
-    MissingExecutable(PathBuf),
-
-    /// Process creation failure while launching worker.
-    #[error("could not spawn worker process: {0}")]
-    Spawn(#[from] crate::win32::Win32Error),
-}
-
 /// Creates the shared queue directory on disk if it does not already exist.
 ///
 /// # Errors
@@ -430,12 +414,12 @@ fn cleanup_own_worker_pid(paths: &Paths) {
 ///
 /// # Errors
 ///
-/// Returns a [`QueueError`] if inspecting the lockfile encounters an I/O error.
-pub fn worker_state(paths: &Paths) -> Result<(bool, Option<u32>), QueueError> {
-    match is_worker_lock_free(paths) {
-        Ok(true) => Ok((false, None)),
-        Ok(false) => Ok((true, read_worker_pid(paths))),
-        Err(err) => Err(QueueError::Lock(err)),
+/// Returns an [`io::Error`] if inspecting the lockfile encounters an I/O error.
+pub fn worker_state(paths: &Paths) -> io::Result<(bool, Option<u32>)> {
+    if is_worker_lock_free(paths)? {
+        Ok((false, None))
+    } else {
+        Ok((true, read_worker_pid(paths)))
     }
 }
 
@@ -443,11 +427,17 @@ pub fn worker_state(paths: &Paths) -> Result<(bool, Option<u32>), QueueError> {
 ///
 /// # Errors
 ///
-/// Returns a [`QueueError`] if the executable cannot be located or process creation fails.
-pub fn spawn_worker(paths: &Paths) -> Result<(), QueueError> {
+/// Returns an [`io::Error`] if the executable cannot be located or process creation fails.
+pub fn spawn_worker(paths: &Paths) -> io::Result<()> {
     let exe = paths.console_exe();
     if !exe.is_file() {
-        return Err(QueueError::MissingExecutable(exe));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "faceit-dem.exe was not found next to this executable.\nExpected: {}",
+                exe.display()
+            ),
+        ));
     }
 
     if config::load_config(&paths.config).notifications_instead_of_console {

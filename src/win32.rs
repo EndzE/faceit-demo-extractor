@@ -1,10 +1,11 @@
 //! Windows platform bindings for Shell operations, WinRT notifications, and console buffers.
 
+use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
@@ -31,38 +32,22 @@ use windows::core::{HSTRING, PCWSTR, h};
 
 const APP_AUMID: &str = "FaceitDemoExtractor";
 const APP_AUMID_KEY: &str = r"Software\Classes\AppUserModelId\FaceitDemoExtractor";
-static APP_AUMID_REGISTERED: OnceLock<Result<(), Win32Error>> = OnceLock::new();
+static APP_AUMID_REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// Errors resulting from Windows API, Shell, or COM operations.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum Win32Error {
     /// Windows system or COM HRESULT error.
     #[error("Windows API error: {0}")]
-    Windows(#[source] windows::core::Error),
+    Windows(#[from] windows::core::Error),
 
     /// Standard I/O error.
     #[error("I/O error: {0}")]
-    Io(#[source] Arc<std::io::Error>),
+    Io(#[from] io::Error),
 
     /// Registry access or modification error.
     #[error("registry error: {0}")]
     Registry(String),
-
-    /// Custom error message.
-    #[error("{0}")]
-    Custom(String),
-}
-
-impl From<windows::core::Error> for Win32Error {
-    fn from(err: windows::core::Error) -> Self {
-        Self::Windows(err)
-    }
-}
-
-impl From<std::io::Error> for Win32Error {
-    fn from(err: std::io::Error) -> Self {
-        Self::Io(Arc::new(err))
-    }
 }
 
 /// Teardown grace period allowing asynchronous WinRT RPC transmission to the
@@ -259,8 +244,8 @@ fn strip_extended_prefix(path: &Path) -> PathBuf {
 ///
 /// # Errors
 ///
-/// Returns a [`Win32Error`] if process creation fails.
-pub fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), Win32Error> {
+/// Returns an [`io::Error`] if process creation fails.
+pub fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> io::Result<()> {
     let flags = if hidden {
         CREATE_NO_WINDOW.0
     } else {
@@ -274,8 +259,8 @@ pub fn spawn_console(exe: &Path, args: &[&str], hidden: bool) -> Result<(), Win3
 ///
 /// # Errors
 ///
-/// Returns a [`Win32Error`] if process creation fails.
-pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
+/// Returns an [`io::Error`] if process creation fails.
+pub fn spawn_new_console(exe: &Path, args: &[&str]) -> io::Result<()> {
     spawn_console(exe, args, false)
 }
 
@@ -283,29 +268,28 @@ pub fn spawn_new_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
 ///
 /// # Errors
 ///
-/// Returns a [`Win32Error`] if process creation fails.
-pub fn spawn_hidden_console(exe: &Path, args: &[&str]) -> Result<(), Win32Error> {
+/// Returns an [`io::Error`] if process creation fails.
+pub fn spawn_hidden_console(exe: &Path, args: &[&str]) -> io::Result<()> {
     spawn_console(exe, args, true)
 }
 
-fn register_app_aumid() -> Result<(), Win32Error> {
+fn register_app_aumid() -> Result<(), String> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
     let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
         .create_subkey(APP_AUMID_KEY)
-        .map_err(|err| {
-            Win32Error::Registry(format!("could not register the notification app id: {err}"))
-        })?;
+        .map_err(|err| format!("could not register the notification app id: {err}"))?;
     key.set_value("DisplayName", &crate::APP_NAME)
-        .map_err(|err| {
-            Win32Error::Registry(format!("could not set the notification app name: {err}"))
-        })?;
+        .map_err(|err| format!("could not set the notification app name: {err}"))?;
     Ok(())
 }
 
 fn ensure_app_aumid() -> Result<(), Win32Error> {
-    APP_AUMID_REGISTERED.get_or_init(register_app_aumid).clone()
+    match APP_AUMID_REGISTERED.get_or_init(register_app_aumid) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(Win32Error::Registry(err.clone())),
+    }
 }
 
 fn create_toast_document(title: &str, message: &str) -> windows::core::Result<XmlDocument> {
