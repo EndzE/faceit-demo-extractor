@@ -18,6 +18,8 @@ const IDLE_WINDOW: Duration = Duration::from_millis(700);
 const MAX_TOTAL: Duration = Duration::from_secs(60);
 const STARTUP_POLL: Duration = Duration::from_millis(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
+const WORKER_LOCK_ATTEMPTS: usize = 5;
+const WORKER_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Errors originating from Explorer context menu queue dispatch.
 #[derive(Debug, thiserror::Error)]
@@ -346,6 +348,27 @@ pub fn try_acquire_worker_lock(paths: &Paths) -> io::Result<Option<File>> {
     }
 }
 
+/// Attempts to acquire the exclusive worker lock, retrying briefly to avoid races with lock probes.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if opening or locking the lockfile fails unexpectedly.
+pub fn acquire_worker_lock(paths: &Paths) -> io::Result<Option<File>> {
+    let file = open_worker_lock(paths)?;
+    for attempt in 0..WORKER_LOCK_ATTEMPTS {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(TryLockError::WouldBlock) => {
+                if attempt + 1 < WORKER_LOCK_ATTEMPTS {
+                    sleep(WORKER_LOCK_RETRY_INTERVAL);
+                }
+            }
+            Err(TryLockError::Error(err)) => return Err(err),
+        }
+    }
+    Ok(None)
+}
+
 /// Attempts to acquire the exclusive spawn lock without blocking.
 ///
 /// # Errors
@@ -627,11 +650,11 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
     }
 
     let deadline = Instant::now() + STARTUP_TIMEOUT;
-    loop {
-        if Instant::now() >= deadline {
-            break;
-        }
-        if read_worker_pid(paths).is_some() || !has_queued_files(paths) {
+    while Instant::now() < deadline {
+        if !is_worker_lock_free(paths).unwrap_or(false)
+            || read_worker_pid(paths).is_some()
+            || !has_queued_files(paths)
+        {
             break;
         }
         sleep(STARTUP_POLL);
@@ -656,7 +679,7 @@ pub fn run_worker(paths: &Paths) -> i32 {
         return 1;
     }
 
-    let lock = match try_acquire_worker_lock(paths) {
+    let lock = match acquire_worker_lock(paths) {
         Ok(Some(lock)) => lock,
         Ok(None) => return 0,
         Err(err) => {
@@ -780,7 +803,7 @@ mod tests {
         let paths = Paths::for_tests(directory.path());
         fs::create_dir_all(&paths.queue_dir).unwrap();
         let entry_path = paths.queue_dir.join("locked.path");
-        fs::write(&entry_path, r"C:\demo.zst").unwrap();
+        fs::write(&entry_path, encode_queue_path(Path::new(r"C:\demo.zst"))).unwrap();
 
         let denied = deny_read_sharing(&entry_path);
         assert!(fs::read(&entry_path).is_err());
