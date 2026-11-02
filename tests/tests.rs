@@ -1561,13 +1561,7 @@ fn unknown_option_exits_two() {
 fn flag_commands_reject_trailing_arguments() {
     let directory = tempfile::tempdir().unwrap();
 
-    for flag in [
-        "--status",
-        "--install",
-        "--remove",
-        "--update-label",
-        "--queue-worker",
-    ] {
+    for flag in ["--status", "--install", "--remove", "--queue-worker"] {
         cli(directory.path())
             .arg(flag)
             .arg("unexpected_arg")
@@ -1912,7 +1906,6 @@ fn missing_file_exits_one() {
 }
 
 const REGISTRY_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsContextMenu";
-const REGISTRY_LABEL_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsUpdateLabel";
 const REGISTRY_STATE_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsState";
 const REGISTRY_STATE_COMMAND_TEST_KEY: &str = r"Software\FaceitDemoExtractorTestsState\command";
 const REGISTRY_PARTIAL_ZST_KEY: &str = r"Software\FaceitDemoExtractorTestsPartialZst";
@@ -1954,34 +1947,8 @@ fn registry_install_and_remove_test_subkey() {
 }
 
 #[test]
-fn update_label_uses_the_current_target_filename() {
-    let _guard = RegistryTestKey(REGISTRY_LABEL_TEST_KEY);
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let _ = hkcu.delete_subkey_all(REGISTRY_LABEL_TEST_KEY);
-
-    let directory = tempfile::tempdir().unwrap();
-    let paths = Paths::for_tests(directory.path());
-    fs::write(
-        &paths.config,
-        serde_json::json!({
-            "target_filename": "demo.dem",
-            "keep_zst": true,
-            "move_to_recycle_bin": false,
-            "csgo_path": null
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    registry::install_context_menu_at(REGISTRY_LABEL_TEST_KEY, "Old label", "old command").unwrap();
-    registry::perform_update_label_at(&paths, REGISTRY_LABEL_TEST_KEY).unwrap();
-
-    let key = hkcu.open_subkey(REGISTRY_LABEL_TEST_KEY).unwrap();
-    let label: String = key.get_value("").unwrap();
-    assert_eq!(label, registry::menu_label_for("demo.dem"));
-
-    registry::remove_context_menu_at(REGISTRY_LABEL_TEST_KEY).unwrap();
-    assert!(registry::perform_update_label_at(&paths, REGISTRY_LABEL_TEST_KEY).is_err());
+fn static_menu_label_is_extract_to_cs2_folder() {
+    assert_eq!(registry::MENU_LABEL, "Extract to CS2 folder");
 }
 
 #[test]

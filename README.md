@@ -61,7 +61,7 @@ Download the latest `faceit-demo-extractor-vX.X.zip` from [Releases](https://git
 1. Download or locate your demo archives (`.dem.zst` or `.dem.bz2`).
 2. Right-click the archive (or select multiple archives and right-click).
    * *Windows 11 note: Hold **`Shift` + Right-click** (or select **Show more options**) to view the classic context menu.*
-3. Select **Extract to CS2 folder (1.dem)**.
+3. Select **Extract to CS2 folder**.
 4. When finished, a confirmation (or native Windows toast notification) will display your extracted demo filename.
 
 ### 2. By Drag and Drop
@@ -79,7 +79,6 @@ You can invoke `faceit-dem.exe` from any terminal or PowerShell session:
 | `faceit-dem --test <archive>` | Verifies archive integrity and checksums without writing any demo files |
 | `faceit-dem --install` | Installs or repairs the Windows Explorer right-click context menu |
 | `faceit-dem --remove` | Unregisters and cleans up the right-click context menu |
-| `faceit-dem --update-label` | Updates the right-click menu label to match current settings |
 | `faceit-dem --help` | Displays command-line usage and available flags |
 
 ---

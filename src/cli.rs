@@ -8,7 +8,7 @@ use crate::queue::ContextMenuError;
 use crate::validate::is_valid_demo_filename;
 use crate::{Paths, config, cs2, extract, output, queue, registry, validate, win32};
 
-const REGISTRY_FLAGS: &[&str] = &["--install", "--remove", "--update-label"];
+const REGISTRY_FLAGS: &[&str] = &["--install", "--remove"];
 const HELP_FLAGS: &[&str] = &["-h", "--help"];
 const MENU_WIDTH: usize = 32;
 
@@ -189,10 +189,6 @@ pub fn usage() -> String {
         command_line(
             "faceit-dem --remove",
             "Remove the Explorer right-click menu",
-        ),
-        command_line(
-            "faceit-dem --update-label",
-            "Refresh the right-click menu text",
         ),
         command_line("faceit-dem --help", "Show this help"),
         String::new(),
@@ -454,20 +450,6 @@ fn menu_change_filename(paths: &Paths, config: &mut config::Config) {
         output::good("Saved."),
         output::strong(&new_name)
     );
-
-    if registry::context_menu_command().is_some() {
-        let Some(answer) = read_line("  Update the right-click menu text? [y/N]: ") else {
-            return;
-        };
-        let answer = answer.trim().to_lowercase();
-
-        if answer == "y" || answer == "yes" {
-            match registry::perform_update_label(paths) {
-                Ok(()) => println!("  {}", output::good("Right-click menu text updated.")),
-                Err(message) => output::error(message.to_string()),
-            }
-        }
-    }
 }
 
 fn menu_toggle_keep_zst(paths: &Paths, config: &mut config::Config) {
@@ -530,21 +512,6 @@ fn menu_toggle_rename_demo(paths: &Paths, config: &mut config::Config) {
                     "  {} Demos will keep their original names.",
                     output::caution("Off.")
                 );
-            }
-
-            if registry::is_context_menu_installed() {
-                println!();
-                let Some(answer) = read_line("  Update the right-click menu text? [y/N]: ") else {
-                    return;
-                };
-                let answer = answer.trim().to_lowercase();
-
-                if answer == "y" || answer == "yes" {
-                    match registry::perform_update_label(paths) {
-                        Ok(()) => println!("  {}", output::good("Right-click menu text updated.")),
-                        Err(message) => output::error(message.to_string()),
-                    }
-                }
             }
         }
         Err(message) => {
@@ -824,10 +791,6 @@ fn run_registry_action(flag: &str, paths: &Paths) -> i32 {
             "Right-click menu installed.",
         ),
         "--remove" => ("Removing right-click menu...", "Right-click menu removed."),
-        "--update-label" => (
-            "Updating right-click menu text...",
-            "Right-click menu text updated.",
-        ),
         _ => unreachable!(),
     };
 
@@ -836,7 +799,6 @@ fn run_registry_action(flag: &str, paths: &Paths) -> i32 {
     let result = match flag {
         "--install" => registry::perform_install(paths),
         "--remove" => registry::perform_remove(),
-        "--update-label" => registry::perform_update_label(paths),
         _ => unreachable!(),
     };
 

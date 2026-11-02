@@ -7,7 +7,6 @@ use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
 
 use crate::Paths;
-use crate::config;
 
 /// Errors that can occur during registry inspection or modification.
 #[derive(Debug, thiserror::Error)]
@@ -20,10 +19,6 @@ pub enum RegistryError {
         /// Expected path where the binary was looked up.
         path: PathBuf,
     },
-
-    /// The context menu is not installed in the registry.
-    #[error("the right-click menu is not installed; nothing to update")]
-    NotInstalled,
 
     /// Registry read or write failure.
     #[error("registry I/O error: {0}")]
@@ -86,11 +81,8 @@ impl ContextMenu {
     }
 }
 
-/// Generates the menu label string for the given target demo filename.
-#[must_use]
-pub fn menu_label_for(target_filename: &str) -> String {
-    format!("Extract to CS2 folder ({target_filename})")
-}
+/// Display label shown in the Windows Explorer right-click context menu.
+pub const MENU_LABEL: &str = "Extract to CS2 folder";
 
 /// Verifies that both `faceit-dem.exe` and `faceit-dem-quiet.exe` exist before registering.
 ///
@@ -182,18 +174,6 @@ pub fn install_context_menu_at(
     Ok(())
 }
 
-/// Updates the display label default value for the context menu subkey at `root`.
-///
-/// # Errors
-///
-/// Returns a [`RegistryError`] if setting the value fails.
-pub fn set_context_menu_label_at(root: &str, label: &str) -> Result<(), RegistryError> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(root)?;
-    key.set_value("", &label)?;
-    Ok(())
-}
-
 /// Recursively removes a context menu subkey tree from the registry.
 ///
 /// # Errors
@@ -208,22 +188,9 @@ pub fn remove_context_menu_at(root: &str) -> Result<(), RegistryError> {
     }
 }
 
-fn expected_menu_label(paths: &Paths) -> String {
-    let config = config::load_config(&paths.config);
-    if config.rename_demo {
-        menu_label_for(&config.target_filename)
-    } else {
-        "Extract to CS2 folder".to_string()
-    }
-}
-
 fn install_context_menu_with(paths: &Paths, root: &str) -> Result<(), RegistryError> {
     ensure_install_binaries(paths)?;
-    install_context_menu_at(
-        root,
-        &expected_menu_label(paths),
-        &build_context_menu_command(paths),
-    )
+    install_context_menu_at(root, MENU_LABEL, &build_context_menu_command(paths))
 }
 
 /// Registers all Explorer context menus defined in [`CTX_MENUS`].
@@ -247,41 +214,6 @@ pub fn perform_remove() -> Result<(), RegistryError> {
     for menu in CTX_MENUS {
         remove_context_menu_at(menu.key)?;
     }
-    Ok(())
-}
-
-/// Updates the context menu label for a single menu root according to current configuration.
-///
-/// # Errors
-///
-/// Returns [`RegistryError::NotInstalled`] if the menu does not exist, or an I/O error on failure.
-pub fn perform_update_label_at(paths: &Paths, root: &str) -> Result<(), RegistryError> {
-    if reg_default(&format!("{root}\\command")).is_none() {
-        if reg_key_exists(root) {
-            return install_context_menu_with(paths, root);
-        }
-        return Err(RegistryError::NotInstalled);
-    }
-
-    set_context_menu_label_at(root, &expected_menu_label(paths))
-}
-
-/// Updates context menu labels for all currently installed menus.
-///
-/// # Errors
-///
-/// Returns [`RegistryError::NotInstalled`] if no menus are installed, or an I/O error on failure.
-pub fn perform_update_label(paths: &Paths) -> Result<(), RegistryError> {
-    let mut any_installed = false;
-    for menu in CTX_MENUS.iter().filter(|menu| menu.is_installed()) {
-        any_installed = true;
-        perform_update_label_at(paths, menu.key)?;
-    }
-
-    if !any_installed {
-        return Err(RegistryError::NotInstalled);
-    }
-
     Ok(())
 }
 
