@@ -613,14 +613,12 @@ pub fn handle_context_menu(paths: &Paths, files: &[OsString]) -> Result<(), Cont
 
     let outcome = enqueue_paths(paths, files)
         .map_err(|err| ContextMenuError::Failure(format!("could not queue file(s): {err}")))?;
-    let partial_failures = (!outcome.failures.is_empty()).then(|| outcome.failures.join("\n"));
 
     if outcome.queued == 0 && outcome.duplicates == 0 {
-        return Err(match partial_failures {
-            Some(message) => ContextMenuError::Failure(message),
-            None => ContextMenuError::Usage("no valid files were queued".to_string()),
-        });
+        return Err(ContextMenuError::Failure(outcome.failures.join("\n")));
     }
+
+    let partial_failures = (!outcome.failures.is_empty()).then(|| outcome.failures.join("\n"));
 
     let spawn_guard = match try_acquire_spawn_lock(paths) {
         Ok(Some(guard)) => guard,

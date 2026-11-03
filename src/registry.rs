@@ -120,12 +120,6 @@ fn reg_key_exists(subkey: &str) -> bool {
         .is_ok()
 }
 
-/// Returns the installed context menu command string if any menu is installed.
-#[must_use]
-pub fn context_menu_command() -> Option<String> {
-    CTX_MENUS.iter().find_map(ContextMenu::command)
-}
-
 /// Checks whether at least one context menu verb is present in the registry.
 #[must_use]
 pub fn is_context_menu_installed() -> bool {

@@ -40,10 +40,6 @@ pub enum Win32Error {
     #[error("Windows API error: {0}")]
     Windows(#[from] windows::core::Error),
 
-    /// Standard I/O error.
-    #[error("I/O error: {0}")]
-    Io(#[from] io::Error),
-
     /// Registry access or modification error.
     #[error("registry error: {0}")]
     Registry(String),

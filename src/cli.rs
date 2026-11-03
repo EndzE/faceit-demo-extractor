@@ -604,16 +604,13 @@ fn menu_option(key: &str, name: &str, value: Option<String>) -> String {
     }
 }
 
-fn menu_option_disabled(key: &str, name: &str, value: Option<&str>) -> String {
-    match value {
-        Some(value) => format!(
-            "  {}  {:<MENU_WIDTH$}  {}",
-            output::muted(key),
-            output::muted(name),
-            output::muted(value)
-        ),
-        None => format!("  {}  {}", output::muted(key), output::muted(name)),
-    }
+fn menu_option_disabled(key: &str, name: &str, value: &str) -> String {
+    format!(
+        "  {}  {:<MENU_WIDTH$}  {}",
+        output::muted(key),
+        output::muted(name),
+        output::muted(value)
+    )
 }
 
 fn run_menu(paths: &Paths) -> i32 {
@@ -685,7 +682,7 @@ fn run_menu(paths: &Paths) -> i32 {
         } else {
             println!(
                 "{}",
-                menu_option_disabled("4", "Change demo filename", Some(&config.target_filename))
+                menu_option_disabled("4", "Change demo filename", &config.target_filename)
             );
         }
         let delimiter_display = format!("\"{}\"", config.delimiter);
@@ -701,7 +698,7 @@ fn run_menu(paths: &Paths) -> i32 {
         } else {
             println!(
                 "{}",
-                menu_option_disabled("5", "Change delimiter", Some(&delimiter_display))
+                menu_option_disabled("5", "Change delimiter", &delimiter_display)
             );
         }
         println!(

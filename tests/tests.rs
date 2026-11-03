@@ -590,18 +590,6 @@ fn test_archive_verifies_checksum_without_writing() {
 }
 
 #[test]
-fn inspect_zstd_header_handles_large_blocks_with_compact_buffer() {
-    let path = std::path::Path::new(
-        r"C:\Users\User\Downloads\1-0a0a90f7-0e49-4a87-8e94-8bbcc758f22d-1-1.dem.zst",
-    );
-    if !path.is_file() {
-        return;
-    }
-
-    assert_eq!(extract::test_archive(path), ExtractResult::Ok);
-}
-
-#[test]
 fn test_archive_rejects_checksum_mismatch() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("corrupt.dem.zst");
@@ -2230,80 +2218,4 @@ fn acquire_worker_lock_returns_none_when_held_by_real_worker() {
     let result = queue::acquire_worker_lock(&paths).unwrap();
     assert!(result.is_none());
     assert!(start.elapsed() >= std::time::Duration::from_millis(15));
-}
-
-#[test]
-#[ignore = "requires real download file and takes ~1-2s to extract"]
-fn benchmark_real_demo_extraction_under_lock_contention() {
-    let real_file_source =
-        r"C:\Users\User\Downloads\1-ee28c48d-e050-4978-b5c7-3a47931bc2b8-1-1.dem.zst";
-    if !std::path::Path::new(real_file_source).exists() {
-        return;
-    }
-
-    let temp_dir = tempfile::tempdir().unwrap();
-    let paths = Paths::for_tests(temp_dir.path());
-    let csgo = temp_dir.path().join("csgo");
-    fs::create_dir_all(&csgo).unwrap();
-    fs::create_dir_all(&paths.queue_dir).unwrap();
-
-    fs::write(
-        &paths.config,
-        serde_json::json!({
-            "target_filename": "1.dem",
-            "keep_zst": true,
-            "move_to_recycle_bin": false,
-            "csgo_path": csgo.to_str().unwrap()
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    let real_copy = temp_dir.path().join("real.dem.zst");
-    fs::copy(real_file_source, &real_copy).unwrap();
-
-    queue::enqueue_paths(&paths, &[real_copy.into_os_string()]).unwrap();
-    assert!(queue::has_queued_files(&paths));
-
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let stop_clone = stop.clone();
-    let paths_clone = paths.clone();
-
-    // Start aggressive probe thread simulating --status and menu refresh
-    let probe_thread = std::thread::spawn(move || {
-        let mut probes = 0usize;
-        while !stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
-            let _ = queue::worker_state(&paths_clone);
-            probes += 1;
-        }
-        probes
-    });
-
-    let start = std::time::Instant::now();
-    let exit_code = queue::run_worker(&paths);
-    let duration = start.elapsed();
-
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let probe_count = probe_thread.join().unwrap();
-
-    println!("Extraction finished in {:.2?}", duration);
-    println!("Probe count during worker execution: {probe_count}");
-    println!("Worker exit code: {exit_code}");
-
-    assert_eq!(exit_code, 0);
-    assert!(
-        !queue::has_queued_files(&paths),
-        "Queue must be completely drained!"
-    );
-    assert!(
-        csgo.join("1.dem").is_file(),
-        "Extracted demo must exist in csgo folder!"
-    );
-
-    let extracted_size = fs::metadata(csgo.join("1.dem")).unwrap().len();
-    println!(
-        "Extracted demo size: {:.2} MB",
-        extracted_size as f64 / 1_048_576.0
-    );
-    assert!(extracted_size > 100_000_000);
 }
