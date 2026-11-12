@@ -373,41 +373,25 @@ fn read_line(prompt: &str) -> Option<String> {
     Some(line)
 }
 
-fn menu_install(paths: &Paths) {
-    println!("{}", output::section("Right-click menu"));
-    println!("  {}", output::muted("Installing..."));
-
+fn menu_install(paths: &Paths) -> String {
     match registry::perform_install(paths) {
-        Ok(()) => {
-            println!("  {}", output::good("Installed."));
-            println!(
-                "  {}",
-                output::muted("Right-click any .zst or .bz2 file in Explorer to extract it.")
-            );
-        }
-        Err(message) => output::error(message.to_string()),
+        Ok(()) => format!("{} Right-click menu installed.", output::good("Installed.")),
+        Err(message) => format!("error: {message}"),
     }
 }
 
-fn menu_remove() {
+fn menu_remove() -> String {
     if !registry::is_context_menu_installed() {
-        println!(
-            "  {}",
-            output::muted("The right-click menu is not installed.")
-        );
-        return;
+        return output::muted("The right-click menu is not installed.").to_string();
     }
-
-    println!("{}", output::section("Right-click menu"));
-    println!("  {}", output::muted("Removing..."));
 
     match registry::perform_remove() {
-        Ok(()) => println!("  {}", output::good("Removed.")),
-        Err(message) => output::error(message.to_string()),
+        Ok(()) => format!("{} Right-click menu removed.", output::good("Removed.")),
+        Err(message) => format!("error: {message}"),
     }
 }
 
-fn menu_change_filename(paths: &Paths, config: &mut config::Config) {
+fn menu_change_filename(paths: &Paths, config: &mut config::Config) -> Option<String> {
     println!("{}", output::section("Demo filename"));
     println!(
         "  {}  {}",
@@ -416,24 +400,21 @@ fn menu_change_filename(paths: &Paths, config: &mut config::Config) {
     );
 
     let Some(input) = read_line("  New demo filename (Enter to cancel): ") else {
-        return;
+        return Some(output::muted("Cancelled.").to_string());
     };
     let new_name = input.trim().trim_matches('"').trim().to_string();
 
     if new_name.is_empty() {
-        println!("  {}", output::muted("Cancelled."));
-        return;
+        return Some(output::muted("Cancelled.").to_string());
     }
 
     if !is_valid_demo_filename(&new_name) {
-        println!("  {}", output::caution("That demo filename is not valid."));
-        println!(
-            "  {}",
-            output::muted(
-                "Use a single filename ending in .dem, without reserved names or <>:\"|?* / \\ characters."
+        return Some(
+            output::caution(
+                "That demo filename is not valid. Use a single filename ending in .dem.",
             )
+            .to_string(),
         );
-        return;
     }
 
     let old_name = config.target_filename.clone();
@@ -441,111 +422,110 @@ fn menu_change_filename(paths: &Paths, config: &mut config::Config) {
 
     if let Err(message) = config::save_config(&paths.config, config) {
         config.target_filename = old_name;
-        output::error(message);
-        return;
+        return Some(format!("error: {message}"));
     }
 
-    println!(
-        "  {} New demos will be written as {}.",
+    Some(format!(
+        "{} New demos will be written as {}.",
         output::good("Saved."),
         output::strong(&new_name)
-    );
+    ))
 }
 
-fn menu_toggle_keep_zst(paths: &Paths, config: &mut config::Config) {
+fn menu_toggle_keep_zst(paths: &Paths, config: &mut config::Config) -> String {
     config.keep_zst = !config.keep_zst;
 
     match config::save_config(&paths.config, config) {
         Ok(()) => {
             if config.keep_zst {
-                println!("  {} Original archives will be kept.", output::good("On."));
+                format!("{} Original archives will be kept.", output::good("On."))
             } else {
-                println!(
-                    "  {} Original archives will be removed after extraction.",
+                format!(
+                    "{} Original archives will be removed after extraction.",
                     output::caution("Off.")
-                );
+                )
             }
         }
         Err(message) => {
             config.keep_zst = !config.keep_zst;
-            output::error(message);
+            format!("error: {message}")
         }
     }
 }
 
-fn menu_toggle_recycle_bin(paths: &Paths, config: &mut config::Config) {
+fn menu_toggle_recycle_bin(paths: &Paths, config: &mut config::Config) -> String {
     config.move_to_recycle_bin = !config.move_to_recycle_bin;
 
     match config::save_config(&paths.config, config) {
         Ok(()) => {
             if config.move_to_recycle_bin {
-                println!(
-                    "  {} Removed archives will be moved to the Recycle Bin.",
+                format!(
+                    "{} Removed archives will be moved to the Recycle Bin.",
                     output::good("On.")
-                );
+                )
             } else {
-                println!(
-                    "  {} Removed archives will be permanently deleted.",
+                format!(
+                    "{} Removed archives will be permanently deleted.",
                     output::caution("Off.")
-                );
+                )
             }
         }
         Err(message) => {
             config.move_to_recycle_bin = !config.move_to_recycle_bin;
-            output::error(message);
+            format!("error: {message}")
         }
     }
 }
 
-fn menu_toggle_rename_demo(paths: &Paths, config: &mut config::Config) {
+fn menu_toggle_rename_demo(paths: &Paths, config: &mut config::Config) -> String {
     config.rename_demo = !config.rename_demo;
 
     match config::save_config(&paths.config, config) {
         Ok(()) => {
             if config.rename_demo {
-                println!(
-                    "  {} Demos will be renamed during extraction.",
+                format!(
+                    "{} Demos will be renamed during extraction.",
                     output::good("On.")
-                );
+                )
             } else {
-                println!(
-                    "  {} Demos will keep their original names.",
+                format!(
+                    "{} Demos will keep their original names.",
                     output::caution("Off.")
-                );
+                )
             }
         }
         Err(message) => {
             config.rename_demo = !config.rename_demo;
-            output::error(message);
+            format!("error: {message}")
         }
     }
 }
 
-fn menu_toggle_notifications(paths: &Paths, config: &mut config::Config) {
+fn menu_toggle_notifications(paths: &Paths, config: &mut config::Config) -> String {
     config.notifications_instead_of_console = !config.notifications_instead_of_console;
 
     match config::save_config(&paths.config, config) {
         Ok(()) => {
             if config.notifications_instead_of_console {
-                println!(
-                    "  {} Right-click extractions will run hidden and report with a notification.",
+                format!(
+                    "{} Right-click extractions will run hidden and report with a notification.",
                     output::good("On.")
-                );
+                )
             } else {
-                println!(
-                    "  {} Right-click extractions will open a console window.",
+                format!(
+                    "{} Right-click extractions will open a console window.",
                     output::caution("Off.")
-                );
+                )
             }
         }
         Err(message) => {
             config.notifications_instead_of_console = !config.notifications_instead_of_console;
-            output::error(message);
+            format!("error: {message}")
         }
     }
 }
 
-fn menu_change_delimiter(paths: &Paths, config: &mut config::Config) {
+fn menu_change_delimiter(paths: &Paths, config: &mut config::Config) -> Option<String> {
     println!("{}", output::section("Change numbering delimiter"));
     println!(
         "  {}",
@@ -556,12 +536,11 @@ fn menu_change_delimiter(paths: &Paths, config: &mut config::Config) {
     println!();
 
     let Some(input) = read_line("  New delimiter (press Enter or type none for empty): ") else {
-        return;
+        return Some(output::muted("Cancelled.").to_string());
     };
     let trimmed = input.trim();
     if trimmed.eq_ignore_ascii_case("cancel") {
-        println!("  {}", output::muted("Cancelled."));
-        return;
+        return Some(output::muted("Cancelled.").to_string());
     }
     let delimiter = if trimmed == "\"\"" || trimmed.eq_ignore_ascii_case("none") {
         ""
@@ -570,29 +549,26 @@ fn menu_change_delimiter(paths: &Paths, config: &mut config::Config) {
     };
 
     if !validate::is_valid_delimiter(delimiter) {
-        println!(
-            "  {}",
+        return Some(
             output::caution(
-                "Invalid delimiter. It cannot contain / \\ : * ? \" < > | or control characters, and must be at most 32 characters."
+                "Invalid delimiter. It cannot contain / \\ : * ? \" < > | or control characters, and must be at most 32 characters.",
             )
+            .to_string(),
         );
-        return;
     }
 
     let old_delimiter = config.delimiter.clone();
     config.delimiter = delimiter.to_string();
 
     match config::save_config(&paths.config, config) {
-        Ok(()) => {
-            println!(
-                "  {} Delimiter set to {}.",
-                output::good("Saved."),
-                output::strong(format!("\"{delimiter}\""))
-            );
-        }
+        Ok(()) => Some(format!(
+            "{} Delimiter set to {}.",
+            output::good("Saved."),
+            output::strong(format!("\"{delimiter}\""))
+        )),
         Err(message) => {
             config.delimiter = old_delimiter;
-            output::error(message);
+            Some(format!("error: {message}"))
         }
     }
 }
@@ -614,14 +590,14 @@ fn menu_option_disabled(key: &str, name: &str, value: &str) -> String {
 }
 
 fn run_menu(paths: &Paths) -> i32 {
-    let mut first = true;
     let mut config = config::load_config(&paths.config);
+    let mut status_message: Option<String> = None;
+    let mut should_clear = false;
 
     loop {
-        if !first {
-            println!();
+        if should_clear {
+            output::clear_screen();
         }
-        first = false;
 
         let (csgo, source) = cs2::find_cs2_csgo_path(config.csgo_path.as_deref(), &paths.exe_dir);
         let menu_state = registry::context_menu_state(paths);
@@ -728,52 +704,61 @@ fn run_menu(paths: &Paths) -> i32 {
         println!("{}", menu_option("0", "Exit", None));
         println!();
 
+        if let Some(status) = &status_message {
+            println!("  {status}");
+            println!();
+        }
+
         let Some(choice) = read_line("  Select an option [0-8]: ") else {
             println!();
             break;
         };
-        let choice = choice.trim().to_lowercase();
+        let choice = choice.trim().trim_start_matches('\u{feff}').to_lowercase();
 
-        if !matches!(choice.as_str(), "0" | "q" | "quit" | "exit") {
-            output::clear_screen();
+        if matches!(choice.as_str(), "0" | "q" | "quit" | "exit") {
+            break;
         }
-        println!();
 
-        match choice.as_str() {
+        should_clear = true;
+
+        status_message = match choice.as_str() {
             "0" | "q" | "quit" | "exit" => break,
-            "1" => menu_install(paths),
-            "2" => menu_remove(),
-            "3" => menu_toggle_rename_demo(paths, &mut config),
+            "1" => Some(menu_install(paths)),
+            "2" => Some(menu_remove()),
+            "3" => Some(menu_toggle_rename_demo(paths, &mut config)),
             "4" => {
                 if config.rename_demo {
-                    menu_change_filename(paths, &mut config);
+                    output::clear_screen();
+                    println!();
+                    menu_change_filename(paths, &mut config)
                 } else {
-                    println!(
-                        "  {}",
+                    Some(
                         output::caution(
-                            "Change demo filename is disabled while Rename demo is off."
+                            "Change demo filename is disabled while Rename demo is off.",
                         )
-                    );
+                        .to_string(),
+                    )
                 }
             }
             "5" => {
                 if config.rename_demo {
-                    menu_change_delimiter(paths, &mut config);
+                    output::clear_screen();
+                    println!();
+                    menu_change_delimiter(paths, &mut config)
                 } else {
-                    println!(
-                        "  {}",
+                    Some(
                         output::caution("Change delimiter is disabled while Rename demo is off.")
-                    );
+                            .to_string(),
+                    )
                 }
             }
-            "6" => menu_toggle_keep_zst(paths, &mut config),
-            "7" => menu_toggle_recycle_bin(paths, &mut config),
-            "8" => menu_toggle_notifications(paths, &mut config),
-            _ => println!(
-                "  {}",
-                output::caution(format!("Unknown option: {choice}. Choose 0-8."))
-            ),
-        }
+            "6" => Some(menu_toggle_keep_zst(paths, &mut config)),
+            "7" => Some(menu_toggle_recycle_bin(paths, &mut config)),
+            "8" => Some(menu_toggle_notifications(paths, &mut config)),
+            _ => {
+                Some(output::caution(format!("Unknown option: {choice}. Choose 0-8.")).to_string())
+            }
+        };
     }
 
     println!();
