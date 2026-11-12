@@ -582,9 +582,9 @@ fn menu_option(key: &str, name: &str, value: Option<String>) -> String {
 
 fn menu_option_disabled(key: &str, name: &str, value: &str) -> String {
     format!(
-        "  {}  {:<MENU_WIDTH$}  {}",
+        "  {}  {}  {}",
         output::muted(key),
-        output::muted(name),
+        output::muted(format!("{name:<MENU_WIDTH$}")),
         output::muted(value)
     )
 }
