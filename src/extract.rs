@@ -392,12 +392,10 @@ fn decode_archive(
             )
         }
         ArchiveFormat::Bzip2 => {
-            // MultiBzDecoder verifies every block CRC, the combined stream
-            // CRC and each stream's end marker while decoding, and reports
-            // "decompression not finished but EOF reached" when a file was
-            // cut short mid-block. Concatenated (pbzip2-style) streams are
-            // decoded back to back.
-            let mut decoder = bzip2::bufread::MultiBzDecoder::new(reader);
+            let threads = std::thread::available_parallelism()
+                .map(|count| count.get())
+                .unwrap_or(4);
+            let mut decoder = mibz2::BzReader::parallel(reader, threads);
             copy_payload(
                 &mut decoder,
                 format,
