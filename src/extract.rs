@@ -568,11 +568,6 @@ pub fn extract_one_with_buffer(
         return ExtractResult::Failed;
     }
 
-    if let Err(err) = temp.as_file().sync_all() {
-        error(format!("could not flush the demo to disk: {err}"));
-        return ExtractResult::Failed;
-    }
-
     let written = match temp.as_file().metadata() {
         Ok(metadata) => metadata.len(),
         Err(err) => {
